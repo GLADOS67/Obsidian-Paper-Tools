@@ -1,0 +1,68 @@
+"""/s: DOI (Digital Object Identifier) regex, repair & canonicalization.
+- PATTERN_DOI: matches 10.XXXX/... across plain text, PDF artifacts, and broken whitespace.
+- repair_doi_text: heals PDF-extraction artifacts (line breaks, missing chars, PMID suffixes).
+- process_doi: normalizes → strips trailing punctuation/tail-parens → safe Obsidian filename.
+"""
+import re
+from functools import lru_cache
+from typing import Tuple
+
+NORMAL_END_CHARS = '。,， \t\n;：:'
+OPEN_PARENS = '（('
+
+PATTERN_DOI = re.compile(r'10\.\d{4,9}/[-A-Za-z0-9._;()/:]+', re.IGNORECASE)
+PATTERN_SAFE_DOI = re.compile(r'^10\.\d{4,9}￥[-A-Za-z0-9._;()/:]+', re.IGNORECASE)
+PATTERN_DOI_REPAIR = re.compile(
+    r'(10\.\d{4,9}/[-A-Za-z0-9._;()/:]*?)[ \t]+(?=[-A-Za-z0-9._;()/:]*\d)([-A-Za-z0-9._;()/:]+)',
+    re.IGNORECASE
+)
+PATTERN_DOI_REPAIR2 = re.compile(
+    r'(10\.\d{4,9}/[-A-Za-z0-9._;()/:]+)([./])\s+([-A-Za-z0-9]{2,}\.[-A-Za-z0-9._;()/:]+)',
+    re.IGNORECASE
+)
+PATTERN_TAIL_PARENS = re.compile(r'[)）].*')
+PATTERN_FS_INVALID = re.compile(r'[\\:*?"<>|]')
+PATTERN_COLLAPSE = re.compile(r'[￥_\s]+')
+PATTERN_TRAILING_DOT = re.compile(r'\.+$')
+PATTERN_TRAILING_PMID = re.compile(r'PMID:?\s*\d+$', re.IGNORECASE)
+
+UNICODE_DASH_TABLE = str.maketrans('\u2010\u2011\u2013\u2014', '----')
+PDF_ARTIFACTS = str.maketrans('', '', '\u200b\u200c\u200d\ufeff\u00ad\u200e\u200f\u2028\u2029')
+
+
+def repair_doi_text(text: str) -> str:
+    text = text.translate(PDF_ARTIFACTS)
+    prev = None
+    while prev != text:
+        prev = text
+        text = PATTERN_DOI_REPAIR2.sub(r'\1\2\3', text)
+        text = PATTERN_DOI_REPAIR.sub(r'\1\2', text)
+    return text
+
+
+def normalize_unicode_dashes(text: str) -> str:
+    return text.translate(UNICODE_DASH_TABLE)
+
+
+def sanitize_pdf_text(text: str) -> str:
+    return text.translate(PDF_ARTIFACTS)
+
+
+@lru_cache(maxsize=4096)
+def process_doi(doi_raw: str) -> Tuple[str, str]:
+    doi_clean = doi_raw.strip().rstrip(NORMAL_END_CHARS)
+    doi_clean = PATTERN_TRAILING_DOT.sub('', doi_clean)
+    doi_clean = PATTERN_TRAILING_PMID.sub('', doi_clean)
+    if not any(p in doi_clean for p in OPEN_PARENS):
+        doi_clean = PATTERN_TAIL_PARENS.sub('', doi_clean)
+    doi_safe = PATTERN_FS_INVALID.sub('', doi_clean.replace('/', '￥'))
+    doi_safe = PATTERN_COLLAPSE.sub('￥', doi_safe).strip('￥-_ ')
+    safe_filename = doi_safe[:200]
+    safe_filename = safe_filename or f'doi-{str(hash(doi_clean))[-8:]}'
+    return doi_clean, safe_filename
+
+
+def make_wikilink(doi: str) -> str:
+    doi = doi.strip().rstrip('.,;:')
+    safe = doi.replace('/', '￥')
+    return f'[[{safe}|{doi}]]'
