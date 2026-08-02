@@ -6,6 +6,8 @@ import os
 import re
 from pathlib import Path
 
+from core.doi import SMART_QUOTE_TABLE
+
 JUNK_TITLES = {
     'untitled', 'microsoft word', 'powerpoint', 'slide', 'slides',
     'pdf', 'document', 'no title', 'title', 'noname',
@@ -13,13 +15,6 @@ JUNK_TITLES = {
     'wolters kluwer', 'springer', 'elsevier'
 }
 ILLEGAL_CHARS = str.maketrans({c: '' for c in r'<>:"/\|?*'})
-
-SMART_QUOTES = str.maketrans({
-    '\u201c': '"',
-    '\u201d': '"',
-    '\u2018': "'",
-    '\u2019': "'",
-})
 
 DOI_RE = re.compile(r'DOI[:;\s]*10\.\d{4,9}/?[-A-Za-z0-9._;()/:]*', re.IGNORECASE)
 STATUS_MARKERS = [
@@ -47,6 +42,7 @@ MSID_RE = re.compile(
     r'^Manuscript\s+ID|^MS\s*\d+)',
     re.IGNORECASE
 )
+SOURCE_EXT_RE = re.compile(r'\.(?:qxd|indd|docx?|pptx?|ai|cdr|psd|pub|idml)\b', re.IGNORECASE)
 
 
 def _strip_author_suffix(title):
@@ -63,18 +59,19 @@ def _is_title_junk(title):
     tlower = title.lower()
     if tlower in JUNK_TITLES:
         return True
-    if any(tlower.startswith(j) for j in JUNK_TITLES if len(j) >= 5):
-        return True
     words = title.split()
-    if len(words) == 1 and title[0].isupper():
+    n_words = len(words)
+    if n_words == 1 and title[0].isupper():
         return True
     if title.isupper():
-        if len(words) <= 6 and all(len(w) <= 4 for w in words):
+        if n_words <= 6 and all(len(w) <= 4 for w in words):
             return True
         if sum(1 for w in words if len(w) == 1) >= 3 and len(title) < 40:
             return True
     bad = sum(1 for c in title if ord(c) < 32 or ord(c) in (0xFFFD, 65533))
-    return bad / len(title) > 0.3
+    if bad / len(title) > 0.3:
+        return True
+    return any(tlower.startswith(j) for j in JUNK_TITLES if len(j) >= 5)
 
 
 def _clean_title(raw_title):
@@ -101,6 +98,8 @@ def _get_metadata_title(doc):
         return None
     if MSID_RE.search(title):
         return None
+    if SOURCE_EXT_RE.search(title):
+        return None
     if title.isupper() and len(title) > 20:
         return None
     title = _clean_title(title)
@@ -118,8 +117,7 @@ def _get_first_page_title(doc):
         if b.get("type") != 0:
             continue
         for line in b.get("lines", []):
-            line_y = line["bbox"][1]
-            line_x = line["bbox"][0]
+            line_y, line_x = line["bbox"][1], line["bbox"][0]
             for span in line.get("spans", []):
                 text = span.get("text", "").strip()
                 if text and len(text) > 1:
@@ -198,7 +196,7 @@ def _extract_from_flat_page(spans, page_h):
 
 
 def _sanitize_filename(title):
-    title = title.translate(SMART_QUOTES)
+    title = title.translate(SMART_QUOTE_TABLE)
     title = title.replace('\n', ' ').replace('\r', ' ')
     title = title.translate(ILLEGAL_CHARS)
     title = ' '.join(title.split())

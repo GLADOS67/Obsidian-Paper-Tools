@@ -37,8 +37,7 @@ def process_existing_references(refs: List[str]) -> List[str]:
             continue
         name, display = parsed
         display_lower = display.lower()
-        if display_lower in seen:
-            continue
-        seen.add(display_lower)
-        processed.append(f'[[{name.replace("/", "￥")}|{display}]]')
+        if display_lower not in seen:
+            seen.add(display_lower)
+            processed.append(f'[[{name.replace("/", "￥")}|{display}]]')
     return processed

@@ -14,22 +14,25 @@ JACCARD_THRESHOLD = 0.85
 
 
 def _extract_doi_set(ref_list: list) -> set:
-    dois = set()
     if not ref_list:
-        return dois
+        return set()
+    dois = set()
     for ref in ref_list:
         if not isinstance(ref, str):
             continue
         ref_clean = ref.replace('\n', ' ')
         m = WIKILINK_RE.search(ref_clean)
-        dois.update(DOI_RE.findall(m.group(2) if m else ref_clean))
+        if m:
+            dois.update(DOI_RE.findall(m.group(2)))
+        else:
+            dois.update(DOI_RE.findall(ref_clean))
     return dois
 
 
 def _first_ref_target(ref_list: list) -> Optional[str]:
     if not ref_list:
         return None
-    ref0 = str(ref_list[0]).replace('\n', ' ').strip()
+    ref0 = ref_list[0].replace('\n', ' ').strip() if isinstance(ref_list[0], str) else str(ref_list[0]).replace('\n', ' ').strip()
     m = WIKILINK_RE.search(ref0)
     return m.group(1).strip() if m else None
 
@@ -37,8 +40,9 @@ def _first_ref_target(ref_list: list) -> Optional[str]:
 def _jaccard(a: set, b: set) -> float:
     if not a and not b:
         return 0.0
-    union = a | b
-    return len(a & b) / len(union) if union else 0.0
+    inter = len(a & b)
+    union = len(a) + len(b) - inter
+    return inter / union if union else 0.0
 
 
 def _link_target(value) -> Optional[str]:
@@ -46,6 +50,18 @@ def _link_target(value) -> Optional[str]:
         return None
     m = LINK_TARGET_RE.search(str(value))
     return m.group(1).strip() if m else None
+
+
+def _match_prop(fm, prop, display, index_map, stem, clip_name, force):
+    existing = fm.get(prop)
+    path = index_map.get(stem)
+    if existing and (not force or not path or _link_target(existing) == path.stem):
+        return 'skipped', None
+    if not path:
+        return 'failed', None
+    fm[prop] = f'[[{path.stem}]]'
+    print(f'[{display}] filename       {clip_name} -> {path.name}')
+    return 'matched', path
 
 
 def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_THRESHOLD,
@@ -150,27 +166,15 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
                     for cand_p, cand_s in sorted(((p, _jaccard(clip_dois, d)) for p, d in chi_doi_sets.items()), key=lambda x: x[1], reverse=True)[:3]:
                         print(f'  jaccard={cand_s:.3f}  {cand_p.name}')
 
-        existing_pa = fm.get('paper-analyze')
-        pa_path = pa_index.get(underscore_stem)
-        if existing_pa and (not force or not pa_path or _link_target(existing_pa) == pa_path.stem):
-            pa_skipped += 1
-        elif pa_path:
-            fm['paper-analyze'] = f'[[{pa_path.stem}]]'
-            pa_matched += 1; any_changed = True
-            print(f'[PA] filename       {clip_md.name} -> {pa_path.name}')
-        else:
-            pa_failed += 1
+        pa_result, _ = _match_prop(fm, 'paper-analyze', 'PA', pa_index, underscore_stem, clip_md.name, force)
+        if pa_result == 'matched': pa_matched += 1; any_changed = True
+        elif pa_result == 'skipped': pa_skipped += 1
+        else: pa_failed += 1
 
-        existing_fe = fm.get('figure-extractor')
-        fe_path = fe_index.get(underscore_stem)
-        if existing_fe and (not force or not fe_path or _link_target(existing_fe) == fe_path.stem):
-            fe_skipped += 1
-        elif fe_path:
-            fm['figure-extractor'] = f'[[{fe_path.stem}]]'
-            fe_matched += 1; any_changed = True
-            print(f'[FE] filename       {clip_md.name} -> {fe_path.name}')
-        else:
-            fe_failed += 1
+        fe_result, _ = _match_prop(fm, 'figure-extractor', 'FE', fe_index, underscore_stem, clip_md.name, force)
+        if fe_result == 'matched': fe_matched += 1; any_changed = True
+        elif fe_result == 'skipped': fe_skipped += 1
+        else: fe_failed += 1
 
         if any_changed and not dry_run:
             clip_md.write_text(dump_frontmatter(fm, body), encoding='utf-8')

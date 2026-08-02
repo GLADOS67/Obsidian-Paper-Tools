@@ -1,12 +1,14 @@
-﻿"""/s: MinerU API batch PDF-to-Markdown pipeline.
-Uploads PDFs to MinerU (mineru.net) in batches ≤45, downloads extracted Markdown +
-formula/table images, enriches frontmatter with Crossref API references &
-PubMed cited-by data.
+﻿"""/s: MinerU API + pdfplumber dual-mode PDF-to-Markdown pipeline.
+Accepts --local flag for offline pdfplumber extraction (no MinerU upload); uploads PDFs
+to MinerU (mineru.net) otherwise. Enriches frontmatter with Crossref API references &
+PubMed cited-by data. Uses multiprocessing for parallel PDF handling.
 """
 import json
+import multiprocessing
 import os
 import re
 import shutil
+import threading
 import time
 import uuid
 import zipfile
@@ -19,24 +21,19 @@ import requests
 
 from core.crossref_api import (fetch_references, get_doi_from_citation,
                                get_cited_by_pubmed, load_cache, save_cache)
-from core.doi import (PATTERN_DOI, normalize_unicode_dashes, process_doi, repair_doi_text)
+from core.doi import (PATTERN_DOI, SMART_QUOTE_TABLE, extract_doi_from_frontmatter,
+                       is_plausible_doi, normalize_unicode_dashes, process_doi, repair_doi_text)
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.markdown_utils import clean_markdown_body
 from config import OBSIDIAN_ROOT
 from core.refs import build_existing_dois, process_existing_references
 from difflib import SequenceMatcher
-from commands.match import run_match
 
-_CHAR_MAP = str.maketrans({
-    '\u201c': '"', '\u201d': '"', '\u2018': "'", '\u2019': "'",
-    '\u2013': '-', '\u2014': '-',
-    '\u2026': '...',
-})
 
+_RE_NORM_STEM = re.compile(r'\s+')
 
 def _normalize_stem(s):
-    s = s.translate(_CHAR_MAP)
-    return re.sub(r'\s+', ' ', s.strip())
+    return _RE_NORM_STEM.sub(' ', s.translate(SMART_QUOTE_TABLE).strip())
 
 
 def _build_clippings_index():
@@ -147,40 +144,15 @@ def apply_upload_urls(token, files_info, url):
             'upload_urls': result['data']['file_urls']}
 
 
-def upload_file(upload_url, file_path):
-    try:
-        with open(file_path, 'rb') as f:
-            res = requests.put(upload_url, data=f, timeout=60)
-        if res.status_code == 200:
-            return True
-        print(f'上传失败：{file_path} | 状态码：{res.status_code}')
-    except Exception as e:
-        print(f'上传异常：{file_path} | 错误：{str(e)}')
-    return False
-
-
-def _get_main_doi(pdf_path, content, fm, pdf_text=None):
-    fm_doi = fm.get('doi')
-    if isinstance(fm_doi, list) and fm_doi:
-        fm_doi = fm_doi[0]
-    if isinstance(fm_doi, str) and (m := PATTERN_DOI.search(fm_doi)):
-        return process_doi(m.group(0))[0]
-    if pdf_text:
-        if dois_found := PATTERN_DOI.findall(repair_doi_text(pdf_text)):
-            return process_doi(dois_found[0])[0]
-    elif pdf_path and pdf_path.exists():
-        try:
-            with pdfplumber.open(pdf_path) as pdf:
-                for page in pdf.pages:
-                    text = normalize_unicode_dashes(page.extract_text() or '')
-                    if dois_found := PATTERN_DOI.findall(repair_doi_text(text)):
-                        return process_doi(dois_found[0])[0]
-        except Exception as e:
-            print(f'PDF提取主DOI失败: {e}')
+def _get_main_doi(content, fm, all_dois=None):
+    if main := extract_doi_from_frontmatter(fm):
+        return main
     doi_line = next((l for l in content.splitlines() if l.strip().lower().startswith('doi:')), None)
     if doi_line and (m := PATTERN_DOI.search(doi_line)):
         return process_doi(m.group(0))[0]
-    if dois := PATTERN_DOI.findall(content):
+    if all_dois:
+        return process_doi(next(iter(all_dois)))[0]
+    if dois := [d for d in PATTERN_DOI.findall(content) if is_plausible_doi(d)]:
         return process_doi(dois[0])[0]
     return None
 
@@ -204,65 +176,92 @@ def _append_crossref_refs(fm, rest, main_doi, crossref_cache, md_name):
         fm['reference'] = fm.get('reference', []) + ref_dois
     if '## 参考文献' in rest:
         return main_doi, None
-    pieces = ['\n\n## 参考文献\n']
+    lines = []
     for i, ref in enumerate(references, 1):
-        text = ref.get('text', '')
-        doi_str = ref.get('doi', '')
-        if text:
-            line = f'{i}. {text}'
-            if doi_str:
-                line += f' DOI: {doi_str}'
-        elif doi_str:
-            line = f'{i}. DOI: {doi_str}'
-        else:
+        text, doi_str = ref.get('text', ''), ref.get('doi', '')
+        if not text and not doi_str:
             continue
-        pieces.append(line + '\n')
-    print(f'已将 {len(references)} 条参考文献添加到 {md_name}')
-    return main_doi, ''.join(pieces)
+        line = f'{i}. {text}' if text else f'{i}. '
+        line += f' DOI: {doi_str}' if doi_str else ''
+        lines.append(line)
+    if lines:
+        print(f'已将 {len(references)} 条参考文献添加到 {md_name}')
+    return main_doi, '\n\n## 参考文献\n' + '\n'.join(lines) if lines else None
 
 
-def _collect_all_dois(content, json_src):
-    all_dois = set(PATTERN_DOI.findall(repair_doi_text(content)))
-    urls_found = []
+def _extract_dois_from_md(content):
+    return set(d for d in PATTERN_DOI.findall(repair_doi_text(content)) if is_plausible_doi(d))
+
+
+def _extract_json_data(json_src):
     if not (json_src and json_src.exists()):
-        return all_dois, urls_found, content
+        return set(), []
     content_data = read_json_file(json_src)
     if content_data is None:
-        return all_dois, urls_found, content
+        return set(), []
+    dois = set()
+    urls = []
     try:
         for page in content_data:
             for block in page:
                 for text in extract_text(block):
                     text = normalize_unicode_dashes(text)
-                    all_dois.update(PATTERN_DOI.findall(repair_doi_text(text)))
-                    urls_found.extend(URL_PATTERN.findall(text))
+                    dois.update(d for d in PATTERN_DOI.findall(repair_doi_text(text))
+                                if is_plausible_doi(d))
+                    urls.extend(URL_PATTERN.findall(text))
     except Exception as e:
         print(f'解析 JSON 内容时出错 {json_src}: {e}')
-    if urls_found:
-        unique_urls = sorted(set(urls_found), key=len, reverse=True)
-        escaped = '|'.join(re.escape(u) for u in unique_urls)
-        content = re.sub(
-            rf'(?<!\]\()({escaped})',
-            r'[\1](sslocal://flow/file_open?url=%5C1&flow_extra=eyJsaW5rX3R5cGUiOiJjb2RlX2ludGVycHJldGVyIn0=)',
-            content
-        )
-    return all_dois, urls_found, content
+    return dois, urls
 
 
-def _extract_pdf_text(pdf_path, all_dois):
-    if not (pdf_path and pdf_path.exists()):
-        return None
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            pages_text = []
-            for page in pdf.pages:
-                text = normalize_unicode_dashes(page.extract_text() or '')
-                pages_text.append(text)
-                all_dois.update(PATTERN_DOI.findall(repair_doi_text(text)))
+def _replace_urls(content, urls):
+    if not urls:
+        return content
+    unique_urls = sorted(set(urls), key=len, reverse=True)
+    escaped = '|'.join(re.escape(u) for u in unique_urls)
+    return re.sub(
+        rf'(?<!\]\()({escaped})',
+        r'[\1](sslocal://flow/file_open?url=%5C1&flow_extra=eyJsaW5rX3R5cGUiOiJjb2RlX2ludGVycHJldGVyIn0=)',
+        content
+    )
+
+
+def _pdf_worker(path):
+    with pdfplumber.open(path) as pdf:
+        pages_text = []
+        for page in pdf.pages:
+            text = normalize_unicode_dashes(page.extract_text() or '')
+            pages_text.append(text)
         return '\n'.join(pages_text)
+
+
+def _pdf_extract_task(queue, pdf_path):
+    queue.put(_pdf_worker(pdf_path))
+
+
+def _extract_pdf_dois(pdf_path):
+    if not (pdf_path and pdf_path.exists()):
+        return set()
+    try:
+        ctx = multiprocessing.get_context('spawn')
+        result_queue = ctx.Queue()
+        p = ctx.Process(target=_pdf_extract_task,
+                        args=(result_queue, pdf_path))
+        p.start()
+        p.join(timeout=60)
+        if p.is_alive():
+            p.terminate()
+            p.join()
+            print(f'PDF文本提取超时(60s)，跳过 {pdf_path.name}')
+            return set()
+        pdf_text = result_queue.get() if not result_queue.empty() else None
+        p.close()
+        if pdf_text:
+            return set(d for d in PATTERN_DOI.findall(repair_doi_text(pdf_text))
+                       if is_plausible_doi(d))
     except Exception as e:
         print(f'从PDF提取DOI失败 {pdf_path.name}: {e}')
-        return None
+    return set()
 
 
 def _update_cited_by(fm, main_doi, crossref_cache, cited_by_max, clippings_doi_set):
@@ -300,9 +299,10 @@ def _merge_new_dois(fm, all_dois, md_name):
 
 
 def _pin_main_doi(fm, main_doi, md_stem):
+    main_doi_lower = main_doi.lower()
     refs = [r for r in fm.get('reference', [])
             if not (r.startswith('[[') and r.endswith(']]') and '|' in r
-                    and r[2:-2].split('|', 1)[1].strip().lower() == main_doi.lower())]
+                    and r[2:-2].split('|', 1)[1].strip().lower() == main_doi_lower)]
     refs.insert(0, f'[[{md_stem}|{main_doi}]]')
     fm['reference'] = refs
 
@@ -312,14 +312,22 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_ca
                         clippings_doi_set=None):
     content = normalize_unicode_dashes(read_text_file(md_dst)) if md_dst.exists() else None
     if content is None:
-        return
+        return False
 
-    all_dois, _urls, content = _collect_all_dois(content, json_src)
-    pdf_text = _extract_pdf_text(pdf_path, all_dois)
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_md = ex.submit(_extract_dois_from_md, content)
+        f_json = ex.submit(_extract_json_data, json_src)
+        f_pdf = ex.submit(_extract_pdf_dois, pdf_path)
+        dois_md = (f_md.result() or set())
+        json_dois, urls = (f_json.result() or (set(), []))
+        dois_pdf = (f_pdf.result() or set())
+
+    all_dois = dois_md | json_dois | dois_pdf
+    content = _replace_urls(content, urls)
 
     fm, rest = parse_frontmatter_str(content)
-    main_doi = _get_main_doi(pdf_path, content, fm, pdf_text)
-    if main_doi is None and enable_api_refs:
+    main_doi = _get_main_doi(content, fm, all_dois)
+    if main_doi is None and enable_api_refs and not all_dois:
         title = fm.get('title', md_dst.stem)
         result = get_doi_from_citation(title, crossref_cache)
         if result:
@@ -352,6 +360,8 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_ca
             f.write(dump_frontmatter(fm, rest))
     except Exception as e:
         print(f'更新MD文件失败 {md_dst}: {e}')
+        return False
+    return True
 
 
 def _download_zip(zip_url, zip_path, file_name, idx):
@@ -420,11 +430,217 @@ def _find_extracted_files(temp_dir):
     return md_src, img_src, json_src
 
 
-def _mark_pdf_done(pdf_path):
+def _find_locking_processes(path):
+    import ctypes
+    from ctypes import wintypes
+
+    class FILETIME(ctypes.Structure):
+        _fields_ = [('dwLowDateTime', wintypes.DWORD),
+                    ('dwHighDateTime', wintypes.DWORD)]
+
+    class RM_UNIQUE_PROCESS(ctypes.Structure):
+        _fields_ = [('dwProcessId', wintypes.DWORD),
+                    ('ProcessStartTime', FILETIME)]
+
+    class RM_PROCESS_INFO(ctypes.Structure):
+        _fields_ = [('Process', RM_UNIQUE_PROCESS),
+                    ('strAppName', wintypes.WCHAR * 256),
+                    ('strServiceShortName', wintypes.WCHAR * 64),
+                    ('ApplicationType', ctypes.c_uint),
+                    ('AppStatus', ctypes.c_ulong),
+                    ('TSSessionId', wintypes.DWORD),
+                    ('bRestartable', wintypes.BOOL)]
+
+    ERROR_MORE_DATA = 234
     try:
-        pdf_path.rename(pdf_path.parent / f'完成_{pdf_path.name}')
+        rm = ctypes.WinDLL('rstrtmgr')
     except Exception:
-        shutil.move(str(pdf_path), str(pdf_path.parent.parent / 'TRASH' / pdf_path.name))
+        return []
+    session = wintypes.DWORD()
+    key = (ctypes.c_wchar * 33)()
+    if rm.RmStartSession(ctypes.byref(session), 0, key) != 0:
+        return []
+    try:
+        resources = (ctypes.c_wchar_p * 1)(str(path))
+        if rm.RmRegisterResources(session, 1, resources, 0, None, 0, None) != 0:
+            return []
+        needed = wintypes.UINT(0)
+        count = wintypes.UINT(0)
+        reasons = wintypes.DWORD(0)
+        res = rm.RmGetList(session, ctypes.byref(needed), ctypes.byref(count),
+                           None, ctypes.byref(reasons))
+        procs = []
+        if res in (0, ERROR_MORE_DATA) and needed.value > 0:
+            arr = (RM_PROCESS_INFO * needed.value)()
+            count = wintypes.UINT(needed.value)
+            if rm.RmGetList(session, ctypes.byref(needed), ctypes.byref(count),
+                            arr, ctypes.byref(reasons)) == 0:
+                for i in range(count.value):
+                    procs.append((arr[i].Process.dwProcessId, arr[i].strAppName))
+        return procs
+    finally:
+        rm.RmEndSession(session)
+
+
+def _report_lock(pdf_path, err):
+    lockers = _find_locking_processes(pdf_path)
+    if lockers:
+        me = os.getpid()
+        info = ', '.join(f'{name or "?"}(PID {pid}{"=本进程" if pid == me else ""})'
+                         for pid, name in lockers)
+        print(f'标记完成失败，文件仍被占用: {pdf_path.name} -> 占用进程: {info}')
+    else:
+        print(f'标记完成失败(未检测到占用进程，可能为杀软/索引器瞬时锁): {pdf_path.name} | {err}')
+
+
+def _mark_pdf_done(pdf_path):
+    import gc
+    target_done = pdf_path.parent / f'完成_{pdf_path.name}'
+    target_trash = pdf_path.parent.parent / 'TRASH' / pdf_path.name
+    last_err = None
+    for attempt in range(6):
+        gc.collect()
+        time.sleep(0.5 * (attempt + 1))
+        try:
+            pdf_path.rename(target_done)
+            return
+        except Exception:
+            pass
+        try:
+            shutil.move(str(pdf_path), str(target_trash))
+            return
+        except Exception as e:
+            last_err = e
+    _report_lock(pdf_path, last_err)
+
+_SENTENCE_END = '.。!！?？:：;；)）]】-—'
+
+_RE_NUMBERED_HEADING = re.compile(r'^[\d.]+\s+\w')
+_RE_SECTION_HEADING = re.compile(
+    r'^(Abstract|Introduction|Methods?|Results?|Discussion|Conclusion|References?|'
+    r'Acknowledgments?|Supplementary|Appendix)',
+    re.IGNORECASE
+)
+
+
+def _table_to_md(table):
+    data = table.extract()
+    if not data:
+        return ''
+    max_cols = max(len(row) for row in data)
+    separator = '| ' + ' | '.join(['---'] * max_cols) + ' |'
+    has_content = False
+    lines = []
+    for row in data:
+        cells = [str(c).replace('\n', ' ').strip() if c else '' for c in row]
+        cells += [''] * (max_cols - len(row))
+        if not has_content:
+            has_content = any(cells)
+        lines.append('| ' + ' | '.join(cells) + ' |')
+    if not has_content:
+        return ''
+    lines.insert(1, separator)
+    return '\n'.join(lines) + '\n'
+
+
+def _merge_paragraphs(text):
+    lines = text.split('\n')
+    result = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip()
+        if not line:
+            result.append('')
+            i += 1
+            continue
+        while i + 1 < len(lines) and lines[i + 1].strip() and (
+            line[-1] not in _SENTENCE_END
+            or lines[i + 1].strip()[0].islower()
+            or line.endswith('-')
+        ):
+            nxt = lines[i + 1].strip()
+            line = line[:-1] + nxt if line.endswith('-') else line + ' ' + nxt
+            i += 1
+        result.append(line)
+        i += 1
+    return '\n'.join(result)
+
+
+def _detect_heading(s):
+    if _RE_NUMBERED_HEADING.match(s):
+        return True
+    if len(s) < 80 and s.isupper() and sum(c.isalpha() for c in s) > 3:
+        return True
+    return bool(_RE_SECTION_HEADING.match(s))
+
+
+def _post_process_markdown(text):
+    lines = text.split('\n')
+    result = []
+    for line in lines:
+        stripped = line.strip()
+        if _detect_heading(stripped) and not stripped.startswith('#'):
+            result.append(f'## {stripped}')
+        else:
+            result.append(line)
+    return '\n'.join(result)
+
+
+def convert_pdf_to_markdown(pdf_path):
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            parts = []
+            for page in pdf.pages:
+                text = page.extract_text(x_tolerance=2, y_tolerance=2)
+                if text:
+                    parts.append(_merge_paragraphs(text))
+                for t in page.find_tables():
+                    mt = _table_to_md(t)
+                    if mt:
+                        parts.append(mt)
+                parts.append('')
+        raw = normalize_unicode_dashes('\n'.join(parts))
+        return _post_process_markdown(raw)
+    except Exception as e:
+        print(f'PDF转换失败 {pdf_path}: {e}')
+        return ''
+
+
+def _run_local_batch(pdf_files, path_md0, pp, enable_api_refs,
+                     crossref_cache, enable_cited_by, cited_by_max,
+                     images_dir, clippings_doi_set):
+    pm = Path(path_md0)
+    cache_lock = threading.Lock()
+
+    def _process_one(pdf_path, idx):
+        print(f'[{idx}/{len(pdf_files)}] {pdf_path.name}')
+        md_content = convert_pdf_to_markdown(pdf_path)
+        if not md_content:
+            print('  转换失败，跳过')
+            return None
+        md_dst = pm / f'{pdf_path.stem}.md'
+        fm = {'title': pdf_path.stem, 'pdf_path': str(pdf_path)}
+        try:
+            md_dst.write_text(dump_frontmatter(fm, md_content), encoding='utf-8')
+        except Exception as e:
+            print(f'  写入失败: {e}')
+            return None
+        with cache_lock:
+            success = _process_md_content(
+                md_dst, None, pdf_path, enable_api_refs,
+                crossref_cache, enable_cited_by, cited_by_max,
+                images_dir, clippings_doi_set,
+            )
+        if success:
+            _mark_pdf_done(pdf_path)
+        return md_dst.name
+
+    with ThreadPoolExecutor(max_workers=min(4, len(pdf_files))) as ex:
+        futures = {ex.submit(_process_one, pf, i): pf for i, pf in enumerate(pdf_files, 1)}
+        for fut in as_completed(futures):
+            name = fut.result()
+            if name:
+                print(f'  完成 -> {name}')
 
 
 def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
@@ -473,10 +689,10 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
                         pass
             if md_dst:
                 pdf_file_path = name_to_path.get(file_name, path_pdf / file_name)
-                _process_md_content(md_dst, json_src, pdf_file_path, enable_api_refs,
-                                    crossref_cache, enable_cited_by, cited_by_max,
-                                    images_output, clippings_doi_set)
-                _mark_pdf_done(pdf_file_path)
+                if _process_md_content(md_dst, json_src, pdf_file_path, enable_api_refs,
+                                       crossref_cache, enable_cited_by, cited_by_max,
+                                       images_output, clippings_doi_set):
+                    _mark_pdf_done(pdf_file_path)
         except Exception as e:
             print(f'处理失败: {e}')
         finally:
@@ -486,11 +702,51 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
 
 def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
                enable_api_refs: bool = True, enable_cited_by: bool = True,
-               cited_by_max: int = 10, token_path: str = None) -> None:
+               cited_by_max: int = 10, token_path: str = None,
+               local: bool = False) -> None:
     token_path = token_path or r'C:\ResearchFront\DATA\API\MinerU.txt'
     path_pdf = path_pdf or r'C:\Vault\PDF'
     path_zip = path_zip or r'C:\Vault\ZIP'
     path_md0 = path_md0 or r'C:\Vault\Claude\MDfrPDF'
+
+    crossref_cache = load_cache()
+    pp = Path(path_pdf)
+    pm = Path(path_md0)
+    for p in (pp, pm):
+        p.mkdir(parents=True, exist_ok=True)
+
+    images_dir = pm / 'images'
+    images_dir.mkdir(exist_ok=True)
+    trash_dir = pp.parent / 'TRASH'
+    trash_dir.mkdir(exist_ok=True)
+
+    pdf_files = sorted({f.absolute() for ext in ['.pdf'] for f in pp.rglob(f'*{ext}') if '完成' not in f.name})
+    filtered = []
+    for pdf_file in pdf_files:
+        done_path = pdf_file.parent / f'完成_{pdf_file.name}'
+        if done_path.exists():
+            print(f'已存在完成版本，移入TRASH: {pdf_file.name}')
+            try:
+                shutil.move(str(pdf_file), str(trash_dir / pdf_file.name))
+            except Exception as e:
+                print(f'移入TRASH失败: {e}')
+        else:
+            filtered.append(pdf_file)
+    pdf_files = filtered
+    if not pdf_files:
+        print('未找到需处理PDF')
+        return
+
+    print(f'共发现 {len(pdf_files)} 个PDF待处理')
+
+    if local:
+        clippings_doi_set = _build_clippings_all_doi_set(pm) if enable_cited_by else None
+        _run_local_batch(pdf_files, path_md0, pp, enable_api_refs,
+                        crossref_cache, enable_cited_by, cited_by_max,
+                        images_dir, clippings_doi_set)
+        save_cache(crossref_cache)
+        print(f'\n全部完成！共处理 {len(pdf_files)} 个PDF，输出到 {pm}')
+        return
 
     token_content = read_text_file(Path(token_path))
     if not token_content:
@@ -498,41 +754,8 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
         return
     token = token_content.strip()
 
-    clippings_idx = _build_clippings_index()
-    crossref_cache = load_cache()
-    pp = Path(path_pdf)
     pz = Path(path_zip)
-    pm = Path(path_md0)
-    for p in (pp, pz, pm):
-        p.mkdir(parents=True, exist_ok=True)
-
-    trash_dir = pp.parent / 'TRASH'
-    trash_dir.mkdir(exist_ok=True)
-    pdf_files = []
-    for pdf_file in sorted({f.absolute() for f in pp.rglob('*.pdf') if '完成' not in f.name}):
-        done_path = pdf_file.parent / f'完成_{pdf_file.name}'
-        if not done_path.exists():
-            pdf_files.append(pdf_file)
-            continue
-        print(f'已存在完成版本: {pdf_file.name}')
-        md_path, domain_dir = _find_clippings_md(pdf_file.stem, clippings_idx)
-        if md_path:
-            print(f'  找到已归档: {md_path.relative_to(OBSIDIAN_ROOT)}')
-            print(f'  执行MATCH: {domain_dir}')
-            match_ok = run_match(str(domain_dir), force=True)
-            if match_ok:
-                print(f'  MATCH成功，移入TRASH: {pdf_file.name}')
-                try:
-                    shutil.move(str(pdf_file), str(trash_dir / pdf_file.name))
-                except Exception as e:
-                    print(f'  移入TRASH失败: {e}')
-            else:
-                print(f'  MATCH无结果，跳过TRASH')
-        else:
-            print(f'  未找到对应.md，跳过TRASH')
-    if not pdf_files:
-        print('未找到需处理PDF')
-        return
+    pz.mkdir(parents=True, exist_ok=True)
 
     batch_limit = 45
     batches = [pdf_files[i:i + batch_limit] for i in range(0, len(pdf_files), batch_limit)]
@@ -553,8 +776,17 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
         bid = url_result['batch_id']
         batch_ids.append(bid)
         print(f'批次 {batch_idx} 申请链接成功 | batch_id：{bid}')
-        uploaded_files = [f for f, u in zip(batch_files, url_result['upload_urls'])
-                          if upload_file(u, f)]
+        all_files = list(zip(batch_files, url_result['upload_urls']))
+        uploaded_files = []
+        for f, u in all_files:
+            try:
+                r = requests.put(u, data=open(f, 'rb'), timeout=60)
+                if r.status_code == 200:
+                    uploaded_files.append(f)
+                    continue
+                print(f'上传失败：{f} | 状态码：{r.status_code}')
+            except Exception as e:
+                print(f'上传异常：{f} | 错误：{e}')
         batch_file_map[bid] = uploaded_files
         total_success += len(uploaded_files)
         print(f'批次 {batch_idx} 上传完成 | 成功：{len(uploaded_files)}/{len(batch_files)}')

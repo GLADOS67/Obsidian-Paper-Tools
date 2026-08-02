@@ -7,29 +7,19 @@ from pathlib import Path
 from typing import Optional
 
 from core.crossref_api import get_cited_by_pubmed, load_cache, save_cache
-from core.doi import PATTERN_DOI, process_doi, repair_doi_text
+from core.doi import PATTERN_DOI, extract_doi_from_frontmatter, process_doi, repair_doi_text
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.obsidian_path import resolve_input_path
 from core.refs import split_wikilink
 
 
-def _fm_main_doi(fm: dict) -> Optional[str]:
-    doi_val = fm.get('doi')
-    if isinstance(doi_val, list) and doi_val:
-        doi_val = doi_val[0]
-    if isinstance(doi_val, str) and (m := PATTERN_DOI.search(doi_val)):
-        return process_doi(m.group(0))[0]
-    return None
-
-
 def _wikilink_doi(ref) -> Optional[str]:
-    if not isinstance(ref, str) or not (parsed := split_wikilink(ref)):
-        return None
-    return process_doi(m.group(0))[0] if (m := PATTERN_DOI.search(parsed[1])) else None
+    parsed = split_wikilink(ref) if isinstance(ref, str) else None
+    return process_doi(m.group(0))[0] if parsed and (m := PATTERN_DOI.search(parsed[1])) else None
 
 
 def _get_main_doi_from_md(fm: dict, body: str) -> Optional[str]:
-    if main := _fm_main_doi(fm):
+    if main := extract_doi_from_frontmatter(fm):
         return main
     refs = fm.get('reference', [])
     if refs and isinstance(refs[0], str):
@@ -53,10 +43,12 @@ def _collect_existing_dois(md_dir: Path) -> set:
             fm, _ = parse_frontmatter_str(md_file.read_text(encoding='utf-8'))
         except Exception:
             continue
-        if main := _fm_main_doi(fm):
+        if main := extract_doi_from_frontmatter(fm):
             existing.add(main.lower())
-        for key in ('reference', 'cited_by'):
-            existing.update(d.lower() for ref in fm.get(key, []) if (d := _wikilink_doi(ref)))
+        existing.update(
+            d.lower() for key in ('reference', 'cited_by')
+            for ref in fm.get(key, []) if (d := _wikilink_doi(ref))
+        )
     return existing
 
 

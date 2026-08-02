@@ -28,9 +28,9 @@ def parse_frontmatter_str(content: str) -> Tuple[Dict, str]:
 
 def parse_frontmatter_file(path: Path) -> Tuple[Optional[Dict], str]:
     data = path.read_bytes()
-    for enc in ('utf-8', 'utf-8-sig', 'gbk', 'gb2312'):
+    for enc in ('utf-8', 'gbk'):
         try:
-            raw = data.decode(enc)
+            raw = data.decode(enc).lstrip('\ufeff')
             break
         except (UnicodeDecodeError, LookupError):
             continue

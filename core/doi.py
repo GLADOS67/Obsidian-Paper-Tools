@@ -28,20 +28,27 @@ PATTERN_DOI_REPAIR2 = re.compile(
 PATTERN_TAIL_PARENS = re.compile(r'[)）].*')
 PATTERN_FS_INVALID = re.compile(r'[\\:*?"<>|]')
 PATTERN_COLLAPSE = re.compile(r'[￥_\s]+')
-PATTERN_TRAILING_DOT = re.compile(r'\.+$')
-PATTERN_TRAILING_PMID = re.compile(r'PMID:?\s*\d+$', re.IGNORECASE)
+PATTERN_DOI_SPLICE = re.compile(r'(?<=[/\-._;():])\s(?=[-A-Za-z0-9._;()/:])', re.IGNORECASE)
+PATTERN_PURE_ALPHA_SUFFIX = re.compile(r'^10\.\d{4,9}/[A-Za-z]+$', re.IGNORECASE)
 
 UNICODE_DASH_TABLE = str.maketrans('\u2010\u2011\u2013\u2014', '----')
 PDF_ARTIFACTS = str.maketrans('', '', '\u200b\u200c\u200d\ufeff\u00ad\u200e\u200f\u2028\u2029')
+SMART_QUOTE_TABLE = str.maketrans({
+    '\u201c': '"', '\u201d': '"', '\u2018': "'", '\u2019': "'",
+    '\u2013': '-', '\u2014': '-',
+    '\u2026': '...',
+})
 
 
 def repair_doi_text(text: str) -> str:
     text = text.translate(PDF_ARTIFACTS)
-    prev = None
-    while prev != text:
+    text = PATTERN_DOI_SPLICE.sub('', text)
+    for _ in range(5):
         prev = text
         text = PATTERN_DOI_REPAIR2.sub(r'\1\2\3', text)
         text = PATTERN_DOI_REPAIR.sub(r'\1\2', text)
+        if prev == text:
+            break
     return text
 
 
@@ -49,22 +56,31 @@ def normalize_unicode_dashes(text: str) -> str:
     return text.translate(UNICODE_DASH_TABLE)
 
 
-def sanitize_pdf_text(text: str) -> str:
-    return text.translate(PDF_ARTIFACTS)
-
-
 @lru_cache(maxsize=4096)
 def process_doi(doi_raw: str) -> Tuple[str, str]:
-    doi_clean = doi_raw.strip().rstrip(NORMAL_END_CHARS)
-    doi_clean = PATTERN_TRAILING_DOT.sub('', doi_clean)
-    doi_clean = PATTERN_TRAILING_PMID.sub('', doi_clean)
+    doi_clean = re.split(r'https?://', doi_raw.strip(), maxsplit=1)[0]
+    doi_clean = re.sub(r'\.?\(?(?:PMID|PMCID):?\s*\d+\)?\.?$', '', doi_clean, flags=re.IGNORECASE)
+    doi_clean = re.sub(r'\(\d{4}\)\.?$|\.+$', '', doi_clean)
+    doi_clean = doi_clean.strip().rstrip(NORMAL_END_CHARS)
     if not any(p in doi_clean for p in OPEN_PARENS):
         doi_clean = PATTERN_TAIL_PARENS.sub('', doi_clean)
     doi_safe = PATTERN_FS_INVALID.sub('', doi_clean.replace('/', '￥'))
     doi_safe = PATTERN_COLLAPSE.sub('￥', doi_safe).strip('￥-_ ')
-    safe_filename = doi_safe[:200]
-    safe_filename = safe_filename or f'doi-{str(hash(doi_clean))[-8:]}'
+    safe_filename = doi_safe[:200] or f'doi-{hash(doi_clean) & 0xFFFFFFFF:08x}'
     return doi_clean, safe_filename
+
+
+def extract_doi_from_frontmatter(fm: dict) -> str | None:
+    doi_val = fm.get('doi')
+    if isinstance(doi_val, list) and doi_val:
+        doi_val = doi_val[0]
+    if isinstance(doi_val, str) and (m := PATTERN_DOI.search(doi_val)):
+        return process_doi(m.group(0))[0]
+    return None
+
+
+def is_plausible_doi(doi: str) -> bool:
+    return not PATTERN_PURE_ALPHA_SUFFIX.match(doi.strip())
 
 
 def make_wikilink(doi: str) -> str:

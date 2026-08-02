@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from core.doi import (PATTERN_DOI, PATTERN_SAFE_DOI, UNICODE_DASH_TABLE,
-                      normalize_unicode_dashes, process_doi, repair_doi_text)
+                       is_plausible_doi, normalize_unicode_dashes, process_doi,
+                       repair_doi_text)
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.markdown_utils import clean_markdown_body
 from core.refs import split_wikilink
@@ -30,7 +31,9 @@ def _parse_cited_by_entry(cb_item) -> Optional[Tuple[str, str]]:
     parsed = split_wikilink(cb_item.strip())
     name_part, doi_part = parsed if parsed else ('', cb_item.strip())
     m = PATTERN_DOI.search(doi_part)
-    return (name_part, process_doi(m.group(0))[0]) if m else None
+    if m and is_plausible_doi(m.group(0)):
+        return (name_part, process_doi(m.group(0))[0])
+    return None
 
 
 def _update_doi_map(display_doi: str, name_part: str,
@@ -42,9 +45,9 @@ def _update_doi_map(display_doi: str, name_part: str,
     (ref_spec, ref_stems), (cb_spec, cb_stems) = unique_map.get(key, ((None, []), (None, [])))
     spec_add = name_part if is_special else None
     if slot == 0:
-        ref_spec, ref_stems = ref_spec or spec_add, ref_stems + [citing_stem]
+        ref_spec, ref_stems = ref_spec or spec_add, ref_stems if citing_stem in ref_stems else ref_stems + [citing_stem]
     else:
-        cb_spec, cb_stems = cb_spec or spec_add, cb_stems + [citing_stem]
+        cb_spec, cb_stems = cb_spec or spec_add, cb_stems if citing_stem in cb_stems else cb_stems + [citing_stem]
     unique_map[key] = ((ref_spec, ref_stems), (cb_spec, cb_stems))
     return (ref_spec or cb_spec or safe_name), is_special
 
@@ -71,12 +74,14 @@ def _process_references(refs: List, unique_map: Dict[str, DoiEntry],
             name_part, display_doi = parsed
         else:
             display_doi, name_part = item
-        used_name, is_special = _update_doi_map(display_doi, name_part, unique_map, citing_stem)
-        if is_special:
-            special_count += 1
+        if not is_plausible_doi(display_doi):
+            continue
         dedup_key = display_doi.lower()
         if dedup_key not in seen:
             seen.add(dedup_key)
+            used_name, is_special = _update_doi_map(display_doi, name_part, unique_map, citing_stem)
+            if is_special:
+                special_count += 1
             result.append(f'[[{used_name}|{display_doi}]]')
     return result, special_count
 
@@ -98,6 +103,8 @@ def _resolve_refs_final(refs, unique_map):
                 result.append(ref)
             continue
         name_part, display_doi = parsed
+        if not is_plausible_doi(display_doi):
+            continue
         is_special = not PATTERN_SAFE_DOI.match(name_part)
         spec = _shared_spec(unique_map.get(display_doi.lower()))
         used_name = spec or (name_part if is_special else process_doi(display_doi)[1])
@@ -153,7 +160,8 @@ def _process_unhandled_file(file: Path, content: str, fm: Dict, rest: str,
     removed = ','.join(k for k in ('author', 'published') if fm.pop(k, None) is not None)
     if removed:
         print(f'    🗑️  删除 {file.name} 字段：{removed}')
-    unique_dois = list({doi.lower(): doi for doi in PATTERN_DOI.findall(repair_doi_text(content))}.values())
+    unique_dois = list({doi.lower(): doi for doi in PATTERN_DOI.findall(repair_doi_text(content))
+                        if is_plausible_doi(doi)}.values())
     doi_refs = [process_doi(doi) for doi in unique_dois]
     refs, special_count = _process_references(doi_refs, unique_map, file.stem, is_existing=False)
     if refs:
@@ -215,6 +223,7 @@ def run_markdown_graph(directory: str) -> None:
         self_doi = _resolve_self_doi(file.stem, refs)
         key = self_doi.lower() if self_doi else None
         citing_stems = unique_map[key][0][1] if (key and key in unique_map) else []
+        citing_stems = [s for s in citing_stems if s != file.stem]
         fm['被引'] = [f'[[{s}]]' for s in citing_stems]
         fm['tags'] = ['正向' if (len(citing_stems) - fm.get('特殊引用数', 0)) > 0 else '负向']
         fm.pop('引用情况', None)

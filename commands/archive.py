@@ -23,6 +23,7 @@ PATTERN_IMG_REL = re.compile(
     r'(!\[[^\]]*\])\(\.\.[\\/]images[\\/]([a-f0-9]+\.(?:jpg|png|jpeg|gif))\)',
     re.IGNORECASE,
 )
+PATTERN_WIKILINK = re.compile(r'\[\[([^\]|]+)')
 
 
 def _resolve_note(src_dir: Path, page: str) -> Path:
@@ -39,8 +40,17 @@ def _resolve_note(src_dir: Path, page: str) -> Path:
 def _wikilink_page(raw) -> Optional[str]:
     if not raw:
         return None
-    m = re.search(r'\[\[([^\]|]+)', str(raw))
+    m = PATTERN_WIKILINK.search(str(raw))
     return m.group(1) if m else None
+
+
+def _replace_img(m, *, src_images, dst_images, prefix, counter):
+    alt, img = m.group(1), m.group(2)
+    src_img, dst_img = src_images / img, dst_images / img
+    if src_img.exists() and not dst_img.exists():
+        shutil.copy2(src_img, dst_img)
+    counter[0] += 1
+    return f'{alt}({prefix}{img})'
 
 
 def _fix_image_paths(md_file: Path, src_images: Path, dst_images: Path) -> int:
@@ -49,36 +59,35 @@ def _fix_image_paths(md_file: Path, src_images: Path, dst_images: Path) -> int:
     except Exception:
         return 0
     prefix = Path(os.path.relpath(dst_images, md_file.parent)).as_posix() + '/'
-    count = 0
-
-    def replace(m):
-        nonlocal count
-        alt, img = m.group(1), m.group(2)
-        src_img, dst_img = src_images / img, dst_images / img
-        if src_img.exists() and not dst_img.exists():
-            shutil.copy2(src_img, dst_img)
-        count += 1
-        return f'{alt}({prefix}{img})'
-
-    content = PATTERN_IMG_ABS.sub(replace, content)
-    content = PATTERN_IMG_REL.sub(replace, content)
-    if count:
+    counter = [0]
+    kwargs = {'src_images': src_images, 'dst_images': dst_images, 'prefix': prefix, 'counter': counter}
+    content = PATTERN_IMG_ABS.sub(lambda m: _replace_img(m, **kwargs), content)
+    content = PATTERN_IMG_REL.sub(lambda m: _replace_img(m, **kwargs), content)
+    if counter[0]:
         md_file.write_text(content, encoding='utf-8')
-    return count
+    return counter[0]
+
+
+def _find_parent(path: Path, condition):
+    p = path
+    while True:
+        if condition(p):
+            return p
+        parent = p.parent
+        if parent == p:
+            return None
+        p = parent
 
 
 def _find_clippings_dir(path: Path) -> Optional[Path]:
-    for p in [path] + list(path.parents):
-        if p.name == 'Clippings':
-            return p
-    return None
+    return _find_parent(path, lambda p: p.name == 'Clippings')
 
 
 def _find_vault(path: Path) -> Path:
-    for p in [path] + list(path.parents):
-        if (p / '.obsidian').exists():
-            return p
-    raise SystemExit(f'Target not under any Obsidian vault: {path}')
+    vault = _find_parent(path, lambda p: (p / '.obsidian').exists())
+    if vault is None:
+        raise SystemExit(f'Target not under any Obsidian vault: {path}')
+    return vault
 
 
 def _try_copy(src: Path, dst: Path) -> str:
@@ -113,7 +122,6 @@ def run_archive(source: str, target: str) -> None:
         dst_dir = dst_dir / 'Clippings'
         rel = dst_dir.relative_to(vault)
     mother = rel.parts[0]
-
     if mother == 'Clippings':
         dst_images = vault / 'Clippings' / 'images'
         dst_claude = vault / 'Claude'

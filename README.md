@@ -6,8 +6,6 @@
 
 # Obsidian-Paper-Tools 2.0 — 卢布林合并
 
-> **卢布林合并 (Union of Lublin, 1569)** — 波兰王冠与立陶宛大公国结束近两百年松散共主，合并为单一联邦：一个君主、一个议会、一种货币。本项目正是 [MinerU-Crossref-4-Obsidian](https://github.com/GLADOS67/MinerU-Crossref-4-Obsidian)（PDF→MD 流水线）与 [DOI-for-Obsidian](https://github.com/GLADOS67/Digital-Object-Identifier-DOI-for-Obsidian)（引用图谱建造器）的卢布林时刻——两套独立系统自此合为统一工具链。
-
 > Obsidian. Our Vault. 🔗 Links. 🧠 Graph. 📂 Open formats.
 > Our way of research.
 >
@@ -83,17 +81,19 @@ pip install .
 | Arg | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--path_pdf` | str | `C:\Vault\PDF` | PDF source directory |
-| `--path_zip` | str | `C:\Vault\ZIP` | ZIP download directory |
+| `--path_zip` | str | `C:\Vault\ZIP` | ZIP download directory (cloud only) |
 | `--path_md0` | str | `C:\Vault\Claude\MDfrPDF` | Markdown output directory |
 | `--enable_api_references` | bool | True | Fetch Crossref references for each paper |
 | `--enable_cited_by` | bool | True | Fetch PubMed cited-by data |
 | `--cited_by_max` | int | 10 | Max cited-by results per paper |
+| `--local` | flag | — | Use pdfplumber offline extraction instead of MinerU cloud |
 
-Uploads PDFs in batches (≤45 per batch) to MinerU API, downloads extracted .zip, unpacks `full.md` + images, enriches frontmatter with DOIs, Crossref references, and PubMed cited-by data. Processed PDFs are renamed with a `完成_` prefix.
+Uploads PDFs in batches (≤45 per batch) to MinerU API, downloads extracted .zip, unpacks `full.md` + images, enriches frontmatter with DOIs, Crossref references, and PubMed cited-by data. With `--local`, uses pdfplumber offline — no cloud upload, suitable for sensitive documents. Processed PDFs are renamed with a `完成_` prefix.
 
 ```bash
 vaultools pdf2md
-vaultools pdf2md --cited_by_max 20 --enable_api_references false
+vaultools pdf2md --local
+vaultools pdf2md --cited_by_max 20
 ```
 
 ---
@@ -108,14 +108,14 @@ vaultools pdf2md --cited_by_max 20 --enable_api_references false
 | `--enable_cited_by` | bool | True | Fetch PubMed cited-by data |
 | `--cited_by_max` | int | 10 | Max cited-by results per paper |
 
-Offline PDF-to-Markdown using pdfplumber — no cloud upload, suitable for sensitive documents. Extracts text, converts tables to Markdown tables, auto-detects section headings, enriches frontmatter with DOIs, Crossref references, and PubMed cited-by data. Processed PDFs are renamed with a `完成_` prefix.
+Shortcut for `pdf2md --local`. Offline PDF-to-Markdown using pdfplumber — no cloud upload, suitable for sensitive documents. Extracts text, converts tables to Markdown tables, auto-detects section headings, enriches frontmatter with DOIs, Crossref references, and PubMed cited-by data.
 
 ```bash
 vaultools pdf2md-local
-vaultools pdf2md-local --cited_by_max 20 --enable_api_references false
+vaultools pdf2md-local --cited_by_max 20
 ```
 
-> **Use `pdf2md-local` when:** privacy matters, you're offline, or MinerU API is unavailable.
+> **Equivalent to:** `vaultools pdf2md --local`
 
 ---
 
@@ -350,9 +350,9 @@ Set by the `markdown` command. `正向` means the paper is cited by at least one
 2. **first_ref** — match the first DOI in `reference` → works when source differs.
 3. **jaccard** — Jaccard similarity on the full DOI set → fallback for ambiguous cases. Threshold default 0.85.
 
-### 7. What is the difference between `pdf2md` and `pdf2md-local`? / `pdf2md` 和 `pdf2md-local` 有什么区别？
+### 7. What is the difference between `pdf2md` (cloud) and `pdf2md --local`? / `pdf2md`（云端）和 `pdf2md --local` 有什么区别？
 
-`pdf2md` uploads PDFs to MinerU cloud API — best quality, supports complex formulas and embedded tables. `pdf2md-local` uses pdfplumber offline — no data leaves your machine, good for sensitive documents, tables converted to Markdown, formulas extracted as plain text.
+`pdf2md` uploads PDFs to MinerU cloud API — best quality, supports complex formulas and embedded tables. `pdf2md --local` (or `pdf2md-local`) uses pdfplumber offline — no data leaves your machine, good for sensitive documents, tables converted to Markdown, formulas extracted as plain text.
 
 ### 8. How does `rename-pdf` extract titles? / `rename-pdf` 如何提取标题？
 
@@ -371,8 +371,6 @@ MIT
 **作者：** Li Kan <lik1453529@163.com>
 
 # Obsidian-Paper-Tools 2.0 — 卢布林合并
-
-> **卢布林合并 (1569)** — 波兰王冠与立陶宛大公国结束近两百年松散共主，合并为单一联邦：一个君主、一个议会、一种货币。本项目正是 [MinerU-Crossref-4-Obsidian](https://github.com/GLADOS67/MinerU-Crossref-4-Obsidian)（PDF→MD 流水线）与 [DOI-for-Obsidian](https://github.com/GLADOS67/Digital-Object-Identifier-DOI-for-Obsidian)（引用图谱建造器）的卢布林时刻——两套独立系统自此合为统一工具链。
 
 > Obsidian。Our Vault。🔗 双向链接。🧠 关系图谱。📂 开放格式。
 > 我们的科研之道。
@@ -449,17 +447,19 @@ pip install .
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `--path_pdf` | str | `C:\Vault\PDF` | PDF 源目录 |
-| `--path_zip` | str | `C:\Vault\ZIP` | ZIP 下载目录 |
+| `--path_zip` | str | `C:\Vault\ZIP` | ZIP 下载目录（仅云端） |
 | `--path_md0` | str | `C:\Vault\Claude\MDfrPDF` | Markdown 输出目录 |
 | `--enable_api_references` | bool | True | 拉取 Crossref 参考文献 |
 | `--enable_cited_by` | bool | True | 拉取 PubMed 引用数据 |
 | `--cited_by_max` | int | 10 | 每篇最多引用篇数 |
+| `--local` | flag | — | 使用 pdfplumber 本地离线提取，不走 MinerU 云端 |
 
-将 PDF 分批上传至 MinerU API（每批 ≤45），下载解包 `full.md` + 图片，自动提取 DOI 并写入 frontmatter 的 `reference` 字段，同时拉取 Crossref 参考文献和 PubMed cited-by 数据。已处理的 PDF 会被重命名为 `完成_` 前缀。
+将 PDF 分批上传至 MinerU API（每批 ≤45），下载解包 `full.md` + 图片，自动提取 DOI、拉取 Crossref 参考文献和 PubMed cited-by 数据。加 `--local` 使用 pdfplumber 本地离线转换 — 无需上传云端，适合涉密文档。已处理 PDF 会被重命名为 `完成_` 前缀。
 
 ```bash
 vaultools pdf2md
-vaultools pdf2md --cited_by_max 20 --enable_api_references false
+vaultools pdf2md --local
+vaultools pdf2md --cited_by_max 20
 ```
 
 ---
@@ -474,14 +474,14 @@ vaultools pdf2md --cited_by_max 20 --enable_api_references false
 | `--enable_cited_by` | bool | True | 拉取 PubMed 引用数据 |
 | `--cited_by_max` | int | 10 | 每篇最多引用篇数 |
 
-使用 pdfplumber 本地离线转换 — 无需上传至云端，适合涉密文档。自动提取正文、表格转 Markdown、检测章节标题，并提取 DOI、拉取 Crossref 参考文献和 PubMed cited-by 数据。已处理 PDF 会被重命名为 `完成_` 前缀。
+`pdf2md --local` 的快捷命令。使用 pdfplumber 本地离线转换 — 无需上传至云端，适合涉密文档。自动提取正文、表格转 Markdown、检测章节标题，并提取 DOI、拉取 Crossref 参考文献和 PubMed cited-by 数据。
 
 ```bash
 vaultools pdf2md-local
-vaultools pdf2md-local --cited_by_max 20 --enable_api_references false
+vaultools pdf2md-local --cited_by_max 20
 ```
 
-> **使用时机：** 隐私优先、离线环境、或 MinerU API 不可用时。
+> **等价于：** `vaultools pdf2md --local`
 
 ---
 
@@ -717,9 +717,9 @@ DEFAULT_MD_PATH = Path(r'C:\Vault\Claude\MDfrPDF')
 2. **first_ref** — `reference` 第一个 DOI 精确匹配，用于 source 不一致的情况。
 3. **jaccard** — 全量 DOI 集合的 Jaccard 相似度 ≥ 阈值（默认 0.85），作为兜底策略。
 
-### 7. `pdf2md` 和 `pdf2md-local` 有什么区别？
+### 7. `pdf2md`（云端）和 `pdf2md --local` 有什么区别？
 
-`pdf2md` 将 PDF 上传至 MinerU 云端 API — 质量最优，支持复杂公式和内嵌表格。`pdf2md-local` 使用 pdfplumber 在本地离线转换 — 数据不离开本机，适合涉密文档，表格转为 Markdown，公式提取为纯文本。
+`pdf2md` 将 PDF 上传至 MinerU 云端 API — 质量最优，支持复杂公式和内嵌表格。`pdf2md --local`（或 `pdf2md-local`）使用 pdfplumber 在本地离线转换 — 数据不离开本机，适合涉密文档，表格转为 Markdown，公式提取为纯文本。
 
 ### 8. `rename-pdf` 如何提取标题？
 
@@ -733,38 +733,39 @@ MIT
 
 ---
 
-## 增量对比 (vs v1.0)
+## 增量对比 (vs v2.0)
 
-对 `Obsidian-Paper-Tools - 1`（v1.0）与 `Obsidian-Paper-Tools - 2`（v2.0）两个项目的 `*.py`、`*.toml`、`*.md` 全部文件逐行比对结果。
+v2.0 与 v2.0 的 `*.py`、`*.toml`、`*.md` 文件逐行对比结果。v2.0 无新增源文件，全部改动为对既有文件的修改；唯一移除文件为 `commands/pdf2md_local.py`（其逻辑并入 `pdf2md.py` 的 `--local` 分支）。
 
-**文件级变化：**
-
-| 维度 | v1.0 | v2.0 |
+| 维度 | v2.0 | v2.0 |
 | --- | --- | --- |
-| **新增文件** | — | `commands/pdf2md_local.py`、`commands/rename_pdf.py`、`core/refs.py` |
-| **移除文件** | 无 | — |
-| **cli.py** | 8 个命令；无本地转换与重命名入口 | 新增 `pdf2md-local`（`--path_pdf`/`--path_md0`/`--enable_api_references`/`--enable_cited_by`/`--cited_by_max`）与 `rename-pdf`（positional `directory`，默认 `.`）两个子命令、参数及分发分支；模块导入增加 `run_pdf2md_local`、`run_rename_pdf` |
-| **config.py** | 无变化 | 与 v1.0 完全一致（13 行） |
-| **pyproject.toml** | description 仅提 MinerU | description 补充 pdfplumber 与 PyMuPDF rename；`dependencies`、版本号、entry-point 均未变（PyMuPDF 未加入依赖） |
-| **README.md** | 仅覆盖 MinerU 云转换的 8 个命令 | 命令概览/用法/FAQ 新增 `pdf2md-local`、`rename-pdf`；FAQ 新增 7、8；项目结构新增两命令与 `refs.py`；外部依赖新增 PyMuPDF/pdfplumber；英中文镜像同步 |
-| **commands/__init__.py** | 文档字符串列 8 个模块 | 新增 `pdf2md_local`、`rename_pdf` 两条说明（12 行） |
-| **commands/pdf2md.py** | 本地重复实现 `process_existing_references`/`_build_existing_dois`；单一大 `_process_md_content`；`完成_` 版 PDF 无条件移入 TRASH | 改为引用 `core.refs`；`_process_md_content` 拆分出 `_collect_all_dois`/`_extract_pdf_text`/`_update_cited_by`/`_merge_new_dois`/`_pin_main_doi`；新增 `_build_clippings_index`/`_find_clippings_md`（SequenceMatcher≥0.85）；`完成_` 版 PDF 先执行 `run_match(force=True)`，成功才移入 TRASH；`clippings_doi_set` 批量预计算 |
-| **commands/markdown_graph.py** | 内联 `_split_wikilink`/`_parse_cited_by_entry` | 改用 `core.refs.split_wikilink`（241 行，少 4 行） |
-| **commands/crossref.py** | 本地 `process_existing_references`（48-74 行） | 改用 `core.refs.process_existing_references`/`split_wikilink`；`_build_ref_list` 用 `split_wikilink` 构建去重集合（346 行，少 29 行） |
-| **commands/match.py** | 本地 `DOI_RE = re.compile(...)` 常量；`run_match` 无返回值 | `DOI_RE` 改为导入 `core.doi.PATTERN_DOI`；`run_match` 返回布尔值（`pt+pa+fe matched > 0`），目录缺失返回 `False` |
-| **commands/cited_by.py** | 手写 wikilink 判断 | `_wikilink_doi` 改用 `core.refs.split_wikilink` |
-| **core/__init__.py** | 无 refs 条目 | 新增 `refs` 模块说明（8 行） |
-| **core/doi.py** | `PATTERN_SAFE_DOI` 无注释 | 新增【勿改】注释（14-18 行），说明全角 `￥` 为刻意设计（Obsidian 将 `/` 视为路径分隔符） |
+| **新增文件** | — | （无） |
+| **移除文件** | `commands/pdf2md_local.py` | — |
+| **README.md** | 含「增量对比 (vs v1.0)」章节；`pdf2md-local` 为独立命令 | 删除 v1.0 对比章节；`pdf2md` 新增 `--local` flag、`pdf2md-local` 改为其快捷命令；FAQ 7 改写；中英文档同步更新 |
+| **cli.py** | if/elif 分发；导入 `run_pdf2md_local`；各 parser 内联定义参数 | `match/case` 分发；删除 `run_pdf2md_local` 导入，`pdf2md-local` 转调 `run_pdf2md(local=True)`；新增 `_add_api_args()` 合并公共参数、`_cmd_remove_doi()` 辅助函数 |
+| **commands/__init__.py** | 描述 `pdf2md_local` 模块 | 更新为 `pdf2md --local` 回退与 `pdf2md-local` 快捷命令说明 |
+| **commands/archive.py** | `_find_clippings_dir`/`_find_vault` 内联遍历；`_fix_image_paths` 用 nonlocal 闭包 | 抽公共 `_find_parent()` 遍历；`_replace_img()` 模块级函数 + 列表计数替代闭包；新增 `PATTERN_WIKILINK` |
+| **commands/cited_by.py** | `_fm_main_doi` 本地实现；`_wikilink_doi` 嵌套 if | 改用 `core.doi.extract_doi_from_frontmatter`；条件表达式简化；双循环改推导式 |
+| **commands/crossref.py** | 用 `yaml` 手写 `_parse_front_matter`/`_write_md` | 改用 `core.frontmatter`；主 DOI 提取复用 `extract_doi_from_frontmatter`；多处加 `is_plausible_doi` 过滤；移除 `yaml` 依赖 |
+| **commands/markdown_graph.py** | 无 plausible 过滤；引用 stem 直接累加 | 多处 `is_plausible_doi` 过滤；`_update_doi_map` 引用去重；`被引` 排除自引用 |
+| **commands/match.py** | PA/FE 各写一份匹配代码；`_jaccard` 构造并集 | 抽公共 `_match_prop()` 复用；`_jaccard` 改为 `inter/(len(a)+len(b)-inter)`；`_first_ref_target` 非字符串兜底 |
+| **commands/pdf2md.py** | 仅 MinerU 云端管道；`_collect_all_dois`/`_extract_pdf_text`/`upload_file`/简单 `_mark_pdf_done` | 双模式管道：新增 `--local`、本地转换全套函数迁入、三路并行 DOI 提取、`multiprocessing` spawn 提取 PDF（60s 超时）、`_mark_pdf_done` 6 次重试 + rstrtmgr 锁检测、完成版 PDF 直接入 TRASH（不再 MATCH）、`_process_md_content` 返回布尔 |
+| **commands/rename_pdf.py** | 本地 `SMART_QUOTES`；无源文件过滤 | `SMART_QUOTE_TABLE` 移入 `core.doi`（新增 `–—…` 映射）；新增 `SOURCE_EXT_RE` 拒绝源文件扩展名标题；`_is_title_junk` 判定顺序调整 |
+| **commands/trash.py** | 无空目录保护 | 空目录早退提示；删除中间变量 `src` |
+| **core/crossref_api.py** | `CACHE_FILE`；固定 0.5s/1s sleep | 改名 `CROSSREF_CACHE` +【勿改】注释；随机 1-2s 延迟；`fetch_references` 重构 refs 组装；links 展开改 for 循环；删除 `_valid_citation_cache` |
+| **core/doi.py** | `PATTERN_TRAILING_DOT`/`PATTERN_TRAILING_PMID`/`sanitize_pdf_text` | 新增 `PATTERN_DOI_SPLICE`、`PATTERN_PURE_ALPHA_SUFFIX`、`SMART_QUOTE_TABLE`、`extract_doi_from_frontmatter`、`is_plausible_doi`；`process_doi` 重构（剥离 URL/PMID/年份、确定性文件名）；`repair_doi_text` 先 splice、5 轮提前 break |
+| **core/frontmatter.py** | 编码尝试 `utf-8/utf-8-sig/gbk/gb2312` 4 项 | 精简为 `utf-8/gbk` 2 项 + `.lstrip('\ufeff')` 处理 BOM |
+| **core/markdown_utils.py** | 4 个模块级辅助函数 | 全部内联为 `clean_markdown_body` 嵌套函数（行为等价） |
+| **core/refs.py** | `if x in seen: continue` | 改为 `if x not in seen:`（纯风格重构，逻辑等价） |
 
-**逐行一致（无变化）文件：** `config.py`、`commands/trash.py`、`commands/remove_doi.py`、`commands/archive.py`、`core/crossref_api.py`、`core/frontmatter.py`、`core/markdown_utils.py`、`core/obsidian_path.py`
+> 逐字一致文件：`config.py`、`pyproject.toml`、`core/__init__.py`、`core/obsidian_path.py`、`commands/remove_doi.py`、`scripts/*.bat`（共 15 个）。
 
 ### 关键变化
 
-- **新增 `pdf2md-local`（离线本地转换）**：基于 pdfplumber 纯本地 PDF→Markdown，无需上传云端、适合涉密文档；自动段落合并（`_merge_paragraphs`）、表格转 Markdown（`_table_to_md`）、章节标题检测（`_detect_heading`），复用 `_process_md_content` 做 Crossref/PubMed frontmatter 增强，`ThreadPoolExecutor`（≤4 并发）处理。
-- **新增 `rename-pdf`（PyMuPDF 重命名）**：优先取元数据 `dc:title`，无效则做首页排版分析（最大字号 + 上半页位置）提取标题；过滤垃圾标题（状态标记、学位后缀、机构、MSID、DOI 文本），清洗为合法文件名（≤250 字符）并处理重名；未安装 PyMuPDF 时提示 `pip install pymupdf`。
-- **新增 `core/refs.py`**：把原先在 `pdf2md.py`、`crossref.py` 中重复的 wikilink 解析（`split_wikilink`）、去重规范化（`process_existing_references`）、DOI 集合构建（`build_existing_dois`）统一抽取；`markdown_graph.py`、`cited_by.py` 也改为复用，消除重复代码。
-- **`pdf2md` 重构为小函数**：单一大 `_process_md_content` 拆分为 `_collect_all_dois`（DOI 收集 + sslocal URL 修复）、`_extract_pdf_text`、`_update_cited_by`、`_merge_new_dois`、`_pin_main_doi`；cited-by 的 `clippings_doi_set` 改为在整个批次开始前预计算并传入，避免逐文件重复扫描。
-- **PDF 重处理逻辑升级**：发现 `完成_` 版本 PDF 时，先通过 `_build_clippings_index`/`_find_clippings_md` 在 `OBSIDIAN_ROOT` 下各 Vault 的 `Clippings` 中定位对应笔记（stem 归一化精确匹配或 SequenceMatcher ≥0.85 模糊匹配），执行 `run_match(force=True)` 补齐 PT/PA/FE 链接，成功后才把旧 PDF 移入 TRASH（替代 v1.0 的无条件移入）。
-- **`run_match` 返回布尔值**：以“本次是否产生新的匹配”为返回值，供 `pdf2md`/`pdf2md-local` 的 TRASH 决策使用；目录缺失时返回 `False` 而非隐式 `None`。
-- **`core/doi.py` 增加【勿改】注释**：明确 `PATTERN_SAFE_DOI` 中的全角 `￥` 是刻意设计而非笔误，用于区分“安全文件名形式”（含 `￥`）与“特殊引用”（含裸 `/`）。
-- **无文件被移除**：v1.0 的全部 20 个文件在 v2.0 中均保留。
+- **本地转换合并**：`commands/pdf2md_local.py` 整体删除，其 pdfplumber 转换与本地批处理逻辑迁入 `commands/pdf2md.py`，`pdf2md-local` 与 `pdf2md --local` 共用 `run_pdf2md(local=True)`（`scripts/PDF2MD-LOCAL.bat` 仍经 `cli.py pdf2md-local` 正常生效）。
+- **DOI 提取增强**：新增 `is_plausible_doi`（过滤 `10.xxxx/纯字母` 误报）与 `PATTERN_DOI_SPLICE`（拼接跨空格断行的 DOI）；`extract_doi_from_frontmatter` 抽为公共函数供 `pdf2md`/`cited_by`/`crossref` 复用。
+- **健壮性**：`_mark_pdf_done` 改为 6 次重试 + Windows Restart Manager 占用进程检测与报告；PDF 文本提取放入 spawn 子进程，60s 超时终止。
+- **性能**：MD/JSON/PDF 三路 DOI 提取由串行改为 `ThreadPoolExecutor` 并行；API 限流延迟由固定 0.5s/1s 改为随机 1-2s。
+- **行为差异**：`完成_` 前缀 PDF 不再执行 MATCH 后入 TRASH，改为直接移入 TRASH；`markdown` 的 `被引` 排除自引用；仅当本地无任何 DOI 时才触发 Crossref citation 查询；`_process_md_content` 返回成功布尔值，失败时不标记完成。
+- **依赖精简**：`commands/crossref.py` 移除直接 `yaml` 依赖；`core/frontmatter.py` 编码探测 4→2 项（BOM 用 lstrip 处理）。
+- **杂项**：CLI 分发 if/elif → `match/case`；`rename_pdf` 复用 `core.doi.SMART_QUOTE_TABLE`（比 v2.0 多 `–—…` 三种字符）并新增源文件扩展名过滤；README 删除 v2.0 遗留的「增量对比 (vs v1.0)」章节，但「项目结构」章节仍残留 `pdf2md_local.py` 条目（未同步，实际文件已删除）。

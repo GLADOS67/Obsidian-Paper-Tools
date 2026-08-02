@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import pdfplumber
-import yaml
 
 from core.crossref_api import (fetch_references, get_doi_from_citation,
                                load_cache, save_cache)
-from core.doi import PATTERN_DOI, process_doi, repair_doi_text
+from core.doi import PATTERN_DOI, extract_doi_from_frontmatter, is_plausible_doi, process_doi, repair_doi_text
+from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.obsidian_path import resolve_input_path, SM_QUICK
 from core.refs import process_existing_references, split_wikilink
 
@@ -27,23 +27,6 @@ _NON_TITLE_RE = re.compile(
     r'summary|materials?|supplementary|appendix)[\s:：]',
     re.IGNORECASE,
 )
-
-
-def _parse_front_matter(content: str) -> Tuple[Optional[dict], str]:
-    if not content.startswith('---'):
-        return None, content
-    try:
-        _, fm_str, body = content.split('---', 2)
-        return yaml.safe_load(fm_str) or {}, body.lstrip()
-    except Exception:
-        return None, content
-
-
-def _write_md(md_path: Path, fm_data: dict, body: str) -> None:
-    md_path.write_text(
-        '---\n' + yaml.dump(fm_data, allow_unicode=True, sort_keys=False) + '---\n' + body,
-        encoding='utf-8',
-    )
 
 
 def _build_ref_list(md_stem: str, main_doi: Optional[str], references: List[Dict],
@@ -70,14 +53,12 @@ def _build_ref_list(md_stem: str, main_doi: Optional[str], references: List[Dict
 
 def update_md_references(md_path: Path, references: List[Dict], main_doi: Optional[str] = None) -> None:
     content = md_path.read_text(encoding='utf-8')
-    fm_data, body = _parse_front_matter(content)
-    if fm_data is None:
-        fm_data = {}
+    fm_data, body = parse_frontmatter_str(content)
     fm_data['reference'] = _build_ref_list(
         md_path.stem, main_doi, references,
         existing_refs=fm_data.get('reference', []),
     )
-    _write_md(md_path, fm_data, body)
+    md_path.write_text(dump_frontmatter(fm_data, body), encoding='utf-8')
     print(f'成功更新Markdown文件: {md_path}')
 
 
@@ -87,7 +68,7 @@ def _extract_doi_from_pdf(pdf_path: Path) -> Optional[str]:
             for page in pdf.pages:
                 text = (page.extract_text() or '').translate(
                     str.maketrans('\u2010\u2011\u2013\u2014\u2015', '-----'))
-                if dois := PATTERN_DOI.findall(repair_doi_text(text)):
+                if dois := [d for d in PATTERN_DOI.findall(repair_doi_text(text)) if is_plausible_doi(d)]:
                     return dois[0]
     except Exception as e:
         print(f'PDF提取主DOI失败: {e}')
@@ -95,21 +76,15 @@ def _extract_doi_from_pdf(pdf_path: Path) -> Optional[str]:
 
 
 def _get_main_doi(pdf_path: Optional[Path], content: Optional[str], fm: Optional[dict]) -> Optional[str]:
-    if fm:
-        fm_doi = fm.get('doi')
-        if isinstance(fm_doi, list) and fm_doi:
-            fm_doi = fm_doi[0]
-        if isinstance(fm_doi, str) and (m := PATTERN_DOI.search(fm_doi)):
-            return process_doi(m.group(0))[0]
-    if pdf_path and pdf_path.exists():
-        doi = _extract_doi_from_pdf(pdf_path)
-        if doi:
-            return process_doi(doi)[0]
+    if fm and (main := extract_doi_from_frontmatter(fm)):
+        return main
+    if pdf_path and pdf_path.exists() and (doi := _extract_doi_from_pdf(pdf_path)):
+        return process_doi(doi)[0]
     if content:
         for line in content.splitlines():
             if line.strip().lower().startswith('doi:') and (m := PATTERN_DOI.search(line)):
                 return process_doi(m.group(0))[0]
-        if dois := PATTERN_DOI.findall(content):
+        if dois := [d for d in PATTERN_DOI.findall(content) if is_plausible_doi(d)]:
             return process_doi(dois[0])[0]
     return None
 
@@ -172,7 +147,7 @@ def process_file(file_path: Path) -> None:
     label = 'Markdown' if suffix == '.md' else 'PDF'
     print(f'处理{label}: {file_path}')
     content = file_path.read_text(encoding='utf-8') if suffix == '.md' else None
-    fm_data, _ = _parse_front_matter(content) if content else (None, None)
+    fm_data, _ = parse_frontmatter_str(content) if content else ({}, '')
     pdf_path = file_path if suffix == '.pdf' else None
     main_doi = _get_main_doi(pdf_path, content, fm_data)
     if not main_doi:
@@ -198,7 +173,7 @@ def process_local_references_in_md(md_path: Path, override_main_doi: Optional[st
         print(f'文件不存在: {md_path}')
         return
     content = md_path.read_text(encoding='utf-8')
-    fm_data, _ = _parse_front_matter(content)
+    fm_data, _ = parse_frontmatter_str(content)
     main_doi = override_main_doi or _get_main_doi(None, content, fm_data)
     cl = content.lower()
     ref_headings = ['参考文献', 'reference']
@@ -271,9 +246,7 @@ def _handle_takeover_mode(file_path: Path) -> None:
         return
     if suffix == '.md':
         content = file_path.read_text(encoding='utf-8')
-        fm_data, body = _parse_front_matter(content)
-        if fm_data is None:
-            fm_data = {}
+        fm_data, body = parse_frontmatter_str(content)
     else:
         content = None
         body = ''
@@ -288,7 +261,7 @@ def _handle_takeover_mode(file_path: Path) -> None:
     refs = fetch_references(main_doi, _cache)
     if suffix == '.md':
         fm_data['reference'] = _build_ref_list(file_path.stem, main_doi, refs)
-        _write_md(file_path, fm_data, body)
+        file_path.write_text(dump_frontmatter(fm_data, body), encoding='utf-8')
         print(f'￥ 接管完成: 清空旧引用，写入 {len(fm_data["reference"])} 条引用（标题DOI置顶）')
 
 
