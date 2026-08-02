@@ -5,9 +5,9 @@ import re
 from pathlib import Path
 from typing import Dict, Optional
 
+from core.doi import PATTERN_DOI as DOI_RE
 from core.frontmatter import parse_frontmatter_file, dump_frontmatter
 
-DOI_RE = re.compile(r'10\.\d{4,9}/[-A-Za-z0-9._;()/:]+')
 WIKILINK_RE = re.compile(r'\[\[([^|]+)\|([^]]+)\]\]')
 LINK_TARGET_RE = re.compile(r'\[\[\s*([^|\]]+)')
 JACCARD_THRESHOLD = 0.85
@@ -55,10 +55,10 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     chi_dir = base / 'Chi'
     if not clip_dir.is_dir():
         print(f'ERROR: Clippings 目录不存在: {clip_dir}')
-        return
+        return False
     if not chi_dir.is_dir():
         print(f'ERROR: Chi 目录不存在: {chi_dir}')
-        return
+        return False
     print(f'Clippings: {clip_dir}\nChi: {chi_dir}')
     if dry_run:
         print('[DRY RUN]\n')
@@ -179,3 +179,4 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     print(f'[PT] Matched: {pt_matched}  Skipped: {pt_skipped}  Failed: {pt_failed}  Methods: source={pt_methods["source"]} first_ref={pt_methods["first_ref"]} jaccard={pt_methods["jaccard"]}')
     print(f'[PA] Matched: {pa_matched}  Skipped: {pa_skipped}  Failed: {pa_failed}')
     print(f'[FE] Matched: {fe_matched}  Skipped: {fe_skipped}  Failed: {fe_failed}')
+    return pt_matched + pa_matched + fe_matched > 0

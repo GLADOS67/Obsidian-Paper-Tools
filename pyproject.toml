@@ -5,7 +5,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 [project]
 name = "obsidian-paper-tools"
 version = "1.0.0"
-description = "Obsidian Vault 学术论文管理工具集 — MinerU PDF-to-Markdown, Crossref DOI references, PubMed cited-by, Obsidian wikilink citation graph"
+description = "Obsidian Vault 学术论文管理工具集 — MinerU & pdfplumber PDF-to-Markdown, PyMuPDF rename, Crossref DOI references, PubMed cited-by, Obsidian wikilink citation graph"
 authors = [
     {name = "Li Kan", email = "lik1453529@163.com"},
 ]

@@ -1,12 +1,13 @@
 """/s: Obsidian-Paper-Tools — Obsidian Vault academic paper management CLI.
-Integrates MinerU PDF-to-Markdown API, Crossref API (DOI references & citation lookup),
-PubMed E-utilities (cited-by queries), pdfplumber (local PDF text extraction),
-and YAML frontmatter manipulation for Obsidian wikilink-based citation graphs.
+Integrates MinerU API (cloud PDF-to-Markdown), pdfplumber (local PDF-to-MD offline),
+Crossref API (DOI references & citation lookup), PubMed E-utilities (cited-by queries),
+PyMuPDF title extraction (PDF rename), and YAML frontmatter manipulation for Obsidian wikilink citation graphs.
 """
 import argparse
 from pathlib import Path
 
 from commands.pdf2md import run_pdf2md
+from commands.pdf2md_local import run_pdf2md_local
 from commands.markdown_graph import run_markdown_graph
 from commands.crossref import handle_input as crossref_handle, run_crossref_interactive
 from commands.match import run_match
@@ -14,6 +15,7 @@ from commands.trash import run_trash
 from commands.remove_doi import run_remove_doi
 from commands.archive import run_archive
 from commands.cited_by import run_cited_by, run_cited_by_interactive
+from commands.rename_pdf import run_rename_pdf
 
 
 def main():
@@ -27,6 +29,13 @@ def main():
     p_pdf2md.add_argument('--enable_api_references', action='store_true', default=True)
     p_pdf2md.add_argument('--enable_cited_by', action='store_true', default=True)
     p_pdf2md.add_argument('--cited_by_max', type=int, default=10)
+
+    p_local = sub.add_parser('pdf2md-local', help='本地pdfplumber PDF转MD')
+    p_local.add_argument('--path_pdf', default=r'C:\Vault\PDF')
+    p_local.add_argument('--path_md0', default=r'C:\Vault\Claude\MDfrPDF')
+    p_local.add_argument('--enable_api_references', action='store_true', default=True)
+    p_local.add_argument('--enable_cited_by', action='store_true', default=True)
+    p_local.add_argument('--cited_by_max', type=int, default=10)
 
     p_md = sub.add_parser('markdown', help='建立DOI引用图谱')
     p_md.add_argument('--path', required=True)
@@ -56,6 +65,9 @@ def main():
     p_arch.add_argument('-s', '--source', required=True)
     p_arch.add_argument('-t', '--target', required=True)
 
+    p_rename = sub.add_parser('rename-pdf', help='Rename PDF files by extracted title')
+    p_rename.add_argument('directory', nargs='?', default='.', help='Directory containing PDF files')
+
     args = parser.parse_args()
     if args.command is None:
         parser.print_help()
@@ -64,6 +76,9 @@ def main():
     if args.command == 'pdf2md':
         run_pdf2md(args.path_pdf, args.path_zip, args.path_md0,
                    args.enable_api_references, args.enable_cited_by, args.cited_by_max)
+    elif args.command == 'pdf2md-local':
+        run_pdf2md_local(args.path_pdf, args.path_md0,
+                         args.enable_api_references, args.enable_cited_by, args.cited_by_max)
     elif args.command == 'markdown':
         run_markdown_graph(args.path)
     elif args.command == 'crossref':
@@ -94,6 +109,8 @@ def main():
             run_cited_by(args.path, args.max)
     elif args.command == 'archive':
         run_archive(args.source, args.target)
+    elif args.command == 'rename-pdf':
+        run_rename_pdf(args.directory)
 
 
 if __name__ == '__main__':

@@ -11,6 +11,11 @@ NORMAL_END_CHARS = '。,， \t\n;：:'
 OPEN_PARENS = '（('
 
 PATTERN_DOI = re.compile(r'10\.\d{4,9}/[-A-Za-z0-9._;()/:]+', re.IGNORECASE)
+# 【勿改】此处 ￥ 全角符号是刻意设计，不是笔误，不要替换为 /。
+# 作用：判断 wikilink 的 name_part 是否已是"安全文件名"形式（DOI 中的 / 已被替换为 ￥）。
+#   name_part 含 ￥ → 匹配   → 安全，正常处理
+#   name_part 含裸 / → 不匹配 → 视为特殊引用
+# 原因：Obsidian 会把裸 / 当作路径分隔符，导致生成错误的嵌套目录。
 PATTERN_SAFE_DOI = re.compile(r'^10\.\d{4,9}￥[-A-Za-z0-9._;()/:]+', re.IGNORECASE)
 PATTERN_DOI_REPAIR = re.compile(
     r'(10\.\d{4,9}/[-A-Za-z0-9._;()/:]*?)[ \t]+(?=[-A-Za-z0-9._;()/:]*\d)([-A-Za-z0-9._;()/:]+)',

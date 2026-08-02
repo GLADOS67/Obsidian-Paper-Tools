@@ -4,4 +4,5 @@
 - frontmatter: YAML frontmatter (YFM / Jekyll-style) parse/dump for Obsidian .md notes.
 - markdown_utils: Markdown body cleaning — image fixup, artifact tags, bracket-link normalization.
 - obsidian_path: Obsidian URI (obsidian://) resolver & fuzzy vault-glob fallback.
+- refs: Wikilink reference utilities — split, deduplicate, build existing DOI sets.
 """

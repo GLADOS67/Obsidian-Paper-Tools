@@ -1,6 +1,7 @@
-"""/s: MinerU API batch PDF-to-Markdown pipeline.
-Uploads PDFs to MinerU (mineru.net), downloads extracted Markdown + images,
-enriches frontmatter with Crossref API references & PubMed cited-by data.
+﻿"""/s: MinerU API batch PDF-to-Markdown pipeline.
+Uploads PDFs to MinerU (mineru.net) in batches ≤45, downloads extracted Markdown +
+formula/table images, enriches frontmatter with Crossref API references &
+PubMed cited-by data.
 """
 import json
 import os
@@ -21,6 +22,54 @@ from core.crossref_api import (fetch_references, get_doi_from_citation,
 from core.doi import (PATTERN_DOI, normalize_unicode_dashes, process_doi, repair_doi_text)
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.markdown_utils import clean_markdown_body
+from config import OBSIDIAN_ROOT
+from core.refs import build_existing_dois, process_existing_references
+from difflib import SequenceMatcher
+from commands.match import run_match
+
+_CHAR_MAP = str.maketrans({
+    '\u201c': '"', '\u201d': '"', '\u2018': "'", '\u2019': "'",
+    '\u2013': '-', '\u2014': '-',
+    '\u2026': '...',
+})
+
+
+def _normalize_stem(s):
+    s = s.translate(_CHAR_MAP)
+    return re.sub(r'\s+', ' ', s.strip())
+
+
+def _build_clippings_index():
+    idx = {}
+    for d in OBSIDIAN_ROOT.iterdir():
+        if not d.is_dir() or d.name.startswith('.') or d.name in ('PDF', 'ZIP', 'TRASH'):
+            continue
+        clip = d / 'Clippings'
+        if not clip.is_dir():
+            continue
+        for md in clip.rglob('*.md'):
+            key = _normalize_stem(md.stem).lower()
+            idx.setdefault(key, []).append((md, d))
+    return idx
+
+
+def _find_clippings_md(pdf_stem, idx):
+    norm = _normalize_stem(pdf_stem).lower()
+    if norm in idx:
+        return idx[norm][0]
+    best_score = 0.0
+    best_entry = None
+    sm = SequenceMatcher()
+    for key, entries in idx.items():
+        sm.set_seqs(norm, key)
+        if sm.quick_ratio() < 0.7:
+            continue
+        score = sm.ratio()
+        if score > best_score:
+            best_score = score
+            best_entry = entries[0]
+    return best_entry if best_score >= 0.85 else (None, None)
+
 
 URL_PATTERN = re.compile(
     r'https?://[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)',
@@ -53,7 +102,7 @@ def extract_text(obj):
     while stack:
         item = stack.pop()
         if isinstance(item, dict):
-            if 'content' in item and isinstance(item['content'], str):
+            if isinstance(item.get('content'), str):
                 yield item['content']
             stack.extend(item.values())
         elif isinstance(item, list):
@@ -62,51 +111,18 @@ def extract_text(obj):
             yield item
 
 
-def process_existing_references(refs):
-    processed, seen = [], set()
-
-    def keep(item):
-        if item not in seen:
-            seen.add(item)
-            processed.append(item)
-
-    for ref in refs:
-        ref = ref.strip()
-        inner = ref[2:-2] if ref.startswith('[[') and ref.endswith(']]') else ''
-        if '|' not in inner:
-            keep(ref)
-            continue
-        s, d = (x.strip() for x in inner.split('|', 1))
-        if not d:
-            keep(ref)
-            continue
-        if d.lower() in seen:
-            continue
-        seen.add(d.lower())
-        processed.append(f'[[{s.replace("/", "￥")}|{d}]]')
-    return processed
-
-
-def _build_existing_dois(references):
-    existing = set()
-    for ref in references:
-        if ref.startswith('[[') and ref.endswith(']]') and '|' in ref:
-            existing.add(ref[2:-2].split('|', 1)[1].strip().lower())
-    return existing
-
-
 def _build_clippings_all_doi_set(md_dir):
     existing = set()
     for md_file in md_dir.glob('*.md'):
         try:
             fm, _ = parse_frontmatter_str(md_file.read_text(encoding='utf-8'))
-            doi = fm.get('doi')
-            if isinstance(doi, list) and doi:
-                doi = doi[0]
-            if isinstance(doi, str) and (m := PATTERN_DOI.search(doi)):
-                existing.add(process_doi(m.group(0))[0].lower())
         except Exception:
-            pass
+            continue
+        doi = fm.get('doi')
+        if isinstance(doi, list) and doi:
+            doi = doi[0]
+        if isinstance(doi, str) and (m := PATTERN_DOI.search(doi)):
+            existing.add(process_doi(m.group(0))[0].lower())
     return existing
 
 
@@ -114,6 +130,7 @@ def apply_upload_urls(token, files_info, url):
     headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {token}'}
     data = {'files': files_info, 'model_version': 'vlm', 'enable_formula': True,
             'enable_table': True, 'language': 'ch'}
+    status = None
     try:
         response = requests.post(url, headers=headers, json=data, timeout=30)
         status = response.status_code
@@ -123,7 +140,7 @@ def apply_upload_urls(token, files_info, url):
     except Exception as e:
         return {'success': False, 'error': str(e)}
     if not isinstance(result, dict):
-        return {'success': False, 'error': f'API返回类型异常'}
+        return {'success': False, 'error': 'API返回类型异常'}
     if result.get('code') != 0:
         return {'success': False, 'error': result.get('msg', '未知错误')}
     return {'success': True, 'batch_id': result['data']['batch_id'],
@@ -175,7 +192,7 @@ def _append_crossref_refs(fm, rest, main_doi, crossref_cache, md_name):
     if not references:
         return main_doi, None
     ref_dois = []
-    existing_dois = _build_existing_dois(fm.get('reference', []))
+    existing_dois = build_existing_dois(fm.get('reference', []))
     for ref in references:
         if not ref['doi']:
             continue
@@ -192,58 +209,114 @@ def _append_crossref_refs(fm, rest, main_doi, crossref_cache, md_name):
         text = ref.get('text', '')
         doi_str = ref.get('doi', '')
         if text:
-            pieces.append(f'{i}. {text}')
+            line = f'{i}. {text}'
             if doi_str:
-                pieces[-1] += f' DOI: {doi_str}'
+                line += f' DOI: {doi_str}'
         elif doi_str:
-            pieces.append(f'{i}. DOI: {doi_str}')
+            line = f'{i}. DOI: {doi_str}'
         else:
             continue
-        pieces[-1] += '\n'
+        pieces.append(line + '\n')
     print(f'已将 {len(references)} 条参考文献添加到 {md_name}')
     return main_doi, ''.join(pieces)
 
 
+def _collect_all_dois(content, json_src):
+    all_dois = set(PATTERN_DOI.findall(repair_doi_text(content)))
+    urls_found = []
+    if not (json_src and json_src.exists()):
+        return all_dois, urls_found, content
+    content_data = read_json_file(json_src)
+    if content_data is None:
+        return all_dois, urls_found, content
+    try:
+        for page in content_data:
+            for block in page:
+                for text in extract_text(block):
+                    text = normalize_unicode_dashes(text)
+                    all_dois.update(PATTERN_DOI.findall(repair_doi_text(text)))
+                    urls_found.extend(URL_PATTERN.findall(text))
+    except Exception as e:
+        print(f'解析 JSON 内容时出错 {json_src}: {e}')
+    if urls_found:
+        unique_urls = sorted(set(urls_found), key=len, reverse=True)
+        escaped = '|'.join(re.escape(u) for u in unique_urls)
+        content = re.sub(
+            rf'(?<!\]\()({escaped})',
+            r'[\1](sslocal://flow/file_open?url=%5C1&flow_extra=eyJsaW5rX3R5cGUiOiJjb2RlX2ludGVycHJldGVyIn0=)',
+            content
+        )
+    return all_dois, urls_found, content
+
+
+def _extract_pdf_text(pdf_path, all_dois):
+    if not (pdf_path and pdf_path.exists()):
+        return None
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            pages_text = []
+            for page in pdf.pages:
+                text = normalize_unicode_dashes(page.extract_text() or '')
+                pages_text.append(text)
+                all_dois.update(PATTERN_DOI.findall(repair_doi_text(text)))
+        return '\n'.join(pages_text)
+    except Exception as e:
+        print(f'从PDF提取DOI失败 {pdf_path.name}: {e}')
+        return None
+
+
+def _update_cited_by(fm, main_doi, crossref_cache, cited_by_max, clippings_doi_set):
+    cited_by_date = fm.get('cited_by_date')
+    if cited_by_date:
+        try:
+            last = datetime.strptime(str(cited_by_date)[:10], '%Y-%m-%d')
+            if (datetime.now() - last).days < 30:
+                return
+        except ValueError:
+            pass
+    count, citing_dois = get_cited_by_pubmed(main_doi, crossref_cache, clippings_doi_set, cited_by_max)
+    fm.pop('cited_by_count', None)
+    fm['cited_by_date'] = datetime.now().strftime('%Y-%m-%d')
+    if citing_dois:
+        fm['cited_by'] = [f'[[{safe}|{display}]]'
+                          for display, safe in (process_doi(d) for d in citing_dois)]
+
+
+def _merge_new_dois(fm, all_dois, md_name):
+    unique_dois = {doi.lower(): doi for doi in all_dois}
+    if not unique_dois:
+        print(f'文件 {md_name} 无有效DOI，跳过reference更新')
+        return
+    new_refs = []
+    existing_dedup = build_existing_dois(fm.get('reference', []))
+    for doi_raw in unique_dois.values():
+        display_doi, safe_filename = process_doi(doi_raw)
+        if display_doi.lower() not in existing_dedup:
+            new_refs.append(f'[[{safe_filename}|{display_doi}]]')
+            existing_dedup.add(display_doi.lower())
+    if new_refs:
+        fm['reference'] = fm.get('reference', []) + new_refs
+        print(f'已将{len(new_refs)}个唯一DOI添加到 {md_name} 的reference')
+
+
+def _pin_main_doi(fm, main_doi, md_stem):
+    refs = [r for r in fm.get('reference', [])
+            if not (r.startswith('[[') and r.endswith(']]') and '|' in r
+                    and r[2:-2].split('|', 1)[1].strip().lower() == main_doi.lower())]
+    refs.insert(0, f'[[{md_stem}|{main_doi}]]')
+    fm['reference'] = refs
+
+
 def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_cache,
-                        enable_cited_by=False, cited_by_max=10, images_dir=None):
+                        enable_cited_by=False, cited_by_max=10, images_dir=None,
+                        clippings_doi_set=None):
     content = normalize_unicode_dashes(read_text_file(md_dst)) if md_dst.exists() else None
     if content is None:
         return
-    all_dois = set()
-    all_dois.update(PATTERN_DOI.findall(repair_doi_text(content)))
-    if json_src and json_src.exists():
-        content_data = read_json_file(json_src)
-        if content_data is not None:
-            urls_found = []
-            try:
-                for page in content_data:
-                    for block in page:
-                        for text in extract_text(block):
-                            text = normalize_unicode_dashes(text)
-                            all_dois.update(PATTERN_DOI.findall(repair_doi_text(text)))
-                            urls_found.extend(URL_PATTERN.findall(text))
-            except Exception as e:
-                print(f'解析 JSON 内容时出错 {json_src}: {e}')
-            if urls_found:
-                unique_urls = sorted(set(urls_found), key=len, reverse=True)
-                escaped = '|'.join(re.escape(u) for u in unique_urls)
-                content = re.sub(
-                    rf'(?<!\]\()({escaped})',
-                    r'[\1](sslocal://flow/file_open?url=%5C1&flow_extra=eyJsaW5rX3R5cGUiOiJjb2RlX2ludGVycHJldGVyIn0=)',
-                    content
-                )
-    pdf_text = None
-    if pdf_path and pdf_path.exists():
-        try:
-            with pdfplumber.open(pdf_path) as pdf:
-                pages_text = []
-                for page in pdf.pages:
-                    text = normalize_unicode_dashes(page.extract_text() or '')
-                    pages_text.append(text)
-                    all_dois.update(set(PATTERN_DOI.findall(repair_doi_text(text))))
-                pdf_text = '\n'.join(pages_text)
-        except Exception as e:
-            print(f'从PDF提取DOI失败 {pdf_path.name}: {e}')
+
+    all_dois, _urls, content = _collect_all_dois(content, json_src)
+    pdf_text = _extract_pdf_text(pdf_path, all_dois)
+
     fm, rest = parse_frontmatter_str(content)
     main_doi = _get_main_doi(pdf_path, content, fm, pdf_text)
     if main_doi is None and enable_api_refs:
@@ -252,51 +325,24 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_ca
         if result:
             main_doi = process_doi(result[0])[0]
             print(f'Crossref标题回退确认主DOI: {main_doi}')
+
     if enable_cited_by and main_doi:
-        cited_by_date = fm.get('cited_by_date')
-        skip_cited_by = False
-        if cited_by_date:
-            try:
-                last = datetime.strptime(str(cited_by_date)[:10], '%Y-%m-%d')
-                if (datetime.now() - last).days < 30:
-                    skip_cited_by = True
-            except ValueError:
-                pass
-        if not skip_cited_by:
-            existing_dois = _build_clippings_all_doi_set(md_dst.parent)
-            count, citing_dois = get_cited_by_pubmed(main_doi, crossref_cache, existing_dois, cited_by_max)
-            fm.pop('cited_by_count', None)
-            fm['cited_by_date'] = datetime.now().strftime('%Y-%m-%d')
-            if citing_dois:
-                fm['cited_by'] = [f'[[{safe}|{display}]]'
-                                  for display, safe in (process_doi(d) for d in citing_dois)]
+        if clippings_doi_set is None:
+            clippings_doi_set = _build_clippings_all_doi_set(md_dst.parent)
+        _update_cited_by(fm, main_doi, crossref_cache, cited_by_max, clippings_doi_set)
+
     existing_refs = fm.get('reference', [])
     if existing_refs:
         fm['reference'] = process_existing_references(existing_refs)
-    unique_dois = {doi.lower(): doi for doi in all_dois}
-    if unique_dois:
-        new_refs = []
-        existing_dedup = _build_existing_dois(fm.get('reference', []))
-        for doi_raw in unique_dois.values():
-            display_doi, safe_filename = process_doi(doi_raw)
-            if display_doi.lower() not in existing_dedup:
-                new_refs.append(f'[[{safe_filename}|{display_doi}]]')
-                existing_dedup.add(display_doi.lower())
-        if new_refs:
-            fm['reference'] = fm.get('reference', []) + new_refs
-            print(f'已将{len(new_refs)}个唯一DOI添加到 {md_dst.name} 的reference')
-    else:
-        print(f'文件 {md_dst.name} 无有效DOI，跳过reference更新')
+    _merge_new_dois(fm, all_dois, md_dst.name)
+
     if enable_api_refs:
         _, ref_section = _append_crossref_refs(fm, rest, main_doi, crossref_cache, md_dst.name)
         if ref_section:
             rest += ref_section
     if main_doi:
-        refs = fm.get('reference', [])
-        refs = [r for r in refs if not (r.startswith('[[') and r.endswith(']]') and '|' in r
-                 and r[2:-2].split('|', 1)[1].strip().lower() == main_doi.lower())]
-        refs.insert(0, f'[[{md_dst.stem}|{main_doi}]]')
-        fm['reference'] = refs
+        _pin_main_doi(fm, main_doi, md_dst.stem)
+
     rest = clean_markdown_body(rest)
     if images_dir:
         rest = re.sub(r'\]\(images/', f']({images_dir.resolve().as_posix()}/', rest)
@@ -400,6 +446,8 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
         futures = {executor.submit(_download_zip, *task): task[3] for task in download_tasks}
         for future in as_completed(futures):
             future.result()
+
+    clippings_doi_set = _build_clippings_all_doi_set(path_md0) if enable_cited_by else None
     for idx, f_info in enumerate(files, 1):
         file_name = f_info['file_name']
         data_id = f_info['data_id']
@@ -426,7 +474,8 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
             if md_dst:
                 pdf_file_path = name_to_path.get(file_name, path_pdf / file_name)
                 _process_md_content(md_dst, json_src, pdf_file_path, enable_api_refs,
-                                    crossref_cache, enable_cited_by, cited_by_max, images_output)
+                                    crossref_cache, enable_cited_by, cited_by_max,
+                                    images_output, clippings_doi_set)
                 _mark_pdf_done(pdf_file_path)
         except Exception as e:
             print(f'处理失败: {e}')
@@ -438,14 +487,10 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
 def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
                enable_api_refs: bool = True, enable_cited_by: bool = True,
                cited_by_max: int = 10, token_path: str = None) -> None:
-    if token_path is None:
-        token_path = r'C:\ResearchFront\DATA\API\MinerU.txt'
-    if path_pdf is None:
-        path_pdf = r'C:\Vault\PDF'
-    if path_zip is None:
-        path_zip = r'C:\Vault\ZIP'
-    if path_md0 is None:
-        path_md0 = r'C:\Vault\Claude\MDfrPDF'
+    token_path = token_path or r'C:\ResearchFront\DATA\API\MinerU.txt'
+    path_pdf = path_pdf or r'C:\Vault\PDF'
+    path_zip = path_zip or r'C:\Vault\ZIP'
+    path_md0 = path_md0 or r'C:\Vault\Claude\MDfrPDF'
 
     token_content = read_text_file(Path(token_path))
     if not token_content:
@@ -453,31 +498,38 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
         return
     token = token_content.strip()
 
+    clippings_idx = _build_clippings_index()
     crossref_cache = load_cache()
     pp = Path(path_pdf)
     pz = Path(path_zip)
     pm = Path(path_md0)
-    for p in [pp, pz, pm]:
+    for p in (pp, pz, pm):
         p.mkdir(parents=True, exist_ok=True)
 
-    pdf_files = sorted(set(
-        f.absolute() for ext in ['.pdf']
-        for f in pp.rglob(f'*{ext}') if '完成' not in f.name
-    ))
     trash_dir = pp.parent / 'TRASH'
     trash_dir.mkdir(exist_ok=True)
-    filtered = []
-    for pdf_file in pdf_files:
+    pdf_files = []
+    for pdf_file in sorted({f.absolute() for f in pp.rglob('*.pdf') if '完成' not in f.name}):
         done_path = pdf_file.parent / f'完成_{pdf_file.name}'
-        if done_path.exists():
-            print(f'已存在完成版本，移入TRASH: {pdf_file.name}')
-            try:
-                shutil.move(str(pdf_file), str(trash_dir / pdf_file.name))
-            except Exception as e:
-                print(f'移入TRASH失败: {e}')
+        if not done_path.exists():
+            pdf_files.append(pdf_file)
+            continue
+        print(f'已存在完成版本: {pdf_file.name}')
+        md_path, domain_dir = _find_clippings_md(pdf_file.stem, clippings_idx)
+        if md_path:
+            print(f'  找到已归档: {md_path.relative_to(OBSIDIAN_ROOT)}')
+            print(f'  执行MATCH: {domain_dir}')
+            match_ok = run_match(str(domain_dir), force=True)
+            if match_ok:
+                print(f'  MATCH成功，移入TRASH: {pdf_file.name}')
+                try:
+                    shutil.move(str(pdf_file), str(trash_dir / pdf_file.name))
+                except Exception as e:
+                    print(f'  移入TRASH失败: {e}')
+            else:
+                print(f'  MATCH无结果，跳过TRASH')
         else:
-            filtered.append(pdf_file)
-    pdf_files = filtered
+            print(f'  未找到对应.md，跳过TRASH')
     if not pdf_files:
         print('未找到需处理PDF')
         return
@@ -504,17 +556,16 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
         uploaded_files = [f for f, u in zip(batch_files, url_result['upload_urls'])
                           if upload_file(u, f)]
         batch_file_map[bid] = uploaded_files
-        batch_success = len(uploaded_files)
-        total_success += batch_success
-        print(f'批次 {batch_idx} 上传完成 | 成功：{batch_success}/{len(batch_files)}')
+        total_success += len(uploaded_files)
+        print(f'批次 {batch_idx} 上传完成 | 成功：{len(uploaded_files)}/{len(batch_files)}')
 
     print(f'所有批次上传完成！总成功：{total_success}/{len(pdf_files)}')
-    if batch_ids:
-        print('\n开始下载并处理结果...')
-        for bid in batch_ids:
-            download_and_process_batch(bid, pz, pm, token, pp, enable_api_refs,
-                                       crossref_cache, enable_cited_by, cited_by_max,
-                                       batch_file_map.get(bid, []))
-    else:
+    if not batch_ids:
         print('没有成功申请的批次，无需下载。')
+        return
+    print('\n开始下载并处理结果...')
+    for bid in batch_ids:
+        download_and_process_batch(bid, pz, pm, token, pp, enable_api_refs,
+                                   crossref_cache, enable_cited_by, cited_by_max,
+                                   batch_file_map.get(bid, []))
     save_cache(crossref_cache)

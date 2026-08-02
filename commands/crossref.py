@@ -14,6 +14,7 @@ from core.crossref_api import (fetch_references, get_doi_from_citation,
                                load_cache, save_cache)
 from core.doi import PATTERN_DOI, process_doi, repair_doi_text
 from core.obsidian_path import resolve_input_path, SM_QUICK
+from core.refs import process_existing_references, split_wikilink
 
 RE_MD_HEADING = re.compile(r'^#\s+(.+)', re.MULTILINE)
 RE_REF_ENTRY = re.compile(r'^\s*(?:\[(\d+)\]|(\d+)\.)\s+(.*)$', re.MULTILINE)
@@ -45,43 +46,13 @@ def _write_md(md_path: Path, fm_data: dict, body: str) -> None:
     )
 
 
-def process_existing_references(refs: List) -> List[str]:
-    processed, seen = [], set()
-
-    def keep(item: str) -> None:
-        if item not in seen:
-            seen.add(item)
-            processed.append(item)
-
-    for ref in refs:
-        ref = ref.strip()
-        if not (ref.startswith('[[') and ref.endswith(']]')):
-            keep(ref)
-            continue
-        inner = ref[2:-2]
-        if '|' not in inner:
-            keep(ref)
-            continue
-        s, d = (x.strip() for x in inner.split('|', 1))
-        if not d:
-            keep(ref)
-            continue
-        d_lower = d.lower()
-        if d_lower in seen:
-            continue
-        seen.add(d_lower)
-        processed.append(f'[[{s.replace("/", "￥")}|{d}]]')
-    return processed
-
-
 def _build_ref_list(md_stem: str, main_doi: Optional[str], references: List[Dict],
                     existing_refs: Optional[List[str]] = None) -> List[str]:
     if existing_refs is None:
         final, seen = [], set()
     else:
-        final = list(process_existing_references(existing_refs))
-        seen = {r[2:-2].split('|', 1)[1].strip().lower()
-                for r in final if '|' in r and r.startswith('[[') and r.endswith(']]')}
+        final = process_existing_references(existing_refs)
+        seen = {p[1].lower() for r in final if (p := split_wikilink(r))}
     if main_doi:
         md_display, _ = process_doi(main_doi)
         final = [r for r in final if md_display.lower() not in r.lower()]

@@ -9,6 +9,7 @@ from core.doi import (PATTERN_DOI, PATTERN_SAFE_DOI, UNICODE_DASH_TABLE,
                       normalize_unicode_dashes, process_doi, repair_doi_text)
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.markdown_utils import clean_markdown_body
+from core.refs import split_wikilink
 
 Slot = Tuple[Optional[str], List[str]]
 DoiEntry = Tuple[Slot, Slot]
@@ -19,20 +20,15 @@ def _shared_spec(entry: Optional[DoiEntry]) -> Optional[str]:
 
 
 def _split_wikilink(ref: str) -> Optional[Tuple[str, str]]:
-    if not (ref.startswith('[[') and ref.endswith(']]') and '|' in ref):
-        return None
-    name_part, display_doi = map(str.strip, ref[2:-2].split('|', 1))
-    return name_part, process_doi(display_doi)[0]
+    parsed = split_wikilink(ref)
+    return (parsed[0], process_doi(parsed[1])[0]) if parsed else None
 
 
 def _parse_cited_by_entry(cb_item) -> Optional[Tuple[str, str]]:
     if not isinstance(cb_item, str):
         return None
-    s = cb_item.strip()
-    if s.startswith('[[') and s.endswith(']]') and '|' in s:
-        name_part, doi_part = map(str.strip, s[2:-2].split('|', 1))
-    else:
-        name_part, doi_part = '', s
+    parsed = split_wikilink(cb_item.strip())
+    name_part, doi_part = parsed if parsed else ('', cb_item.strip())
     m = PATTERN_DOI.search(doi_part)
     return (name_part, process_doi(m.group(0))[0]) if m else None
 

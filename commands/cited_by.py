@@ -10,6 +10,7 @@ from core.crossref_api import get_cited_by_pubmed, load_cache, save_cache
 from core.doi import PATTERN_DOI, process_doi, repair_doi_text
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.obsidian_path import resolve_input_path
+from core.refs import split_wikilink
 
 
 def _fm_main_doi(fm: dict) -> Optional[str]:
@@ -22,10 +23,9 @@ def _fm_main_doi(fm: dict) -> Optional[str]:
 
 
 def _wikilink_doi(ref) -> Optional[str]:
-    if not (isinstance(ref, str) and ref.startswith('[[') and ref.endswith(']]') and '|' in ref):
+    if not isinstance(ref, str) or not (parsed := split_wikilink(ref)):
         return None
-    d = ref[2:-2].split('|', 1)[1].strip()
-    return process_doi(m.group(0))[0] if (m := PATTERN_DOI.search(d)) else None
+    return process_doi(m.group(0))[0] if (m := PATTERN_DOI.search(parsed[1])) else None
 
 
 def _get_main_doi_from_md(fm: dict, body: str) -> Optional[str]:
