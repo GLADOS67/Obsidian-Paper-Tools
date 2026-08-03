@@ -11,10 +11,11 @@ import pdfplumber
 
 from core.crossref_api import (fetch_references, get_doi_from_citation,
                                load_cache, save_cache)
-from core.doi import PATTERN_DOI, extract_doi_from_frontmatter, is_plausible_doi, process_doi, repair_doi_text
+from core.doi import (PATTERN_DOI, doi_from_doi_line, extract_doi_from_frontmatter,
+                      find_plausible_dois, process_doi, repair_doi_text)
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.obsidian_path import resolve_input_path, SM_QUICK
-from core.refs import process_existing_references, split_wikilink
+from core.refs import new_doi_wikilinks, process_existing_references, split_wikilink
 
 RE_MD_HEADING = re.compile(r'^#\s+(.+)', re.MULTILINE)
 RE_REF_ENTRY = re.compile(r'^\s*(?:\[(\d+)\]|(\d+)\.)\s+(.*)$', re.MULTILINE)
@@ -41,13 +42,7 @@ def _build_ref_list(md_stem: str, main_doi: Optional[str], references: List[Dict
         final = [r for r in final if md_display.lower() not in r.lower()]
         final.insert(0, f'[[{md_stem}|{md_display}]]')
         seen.add(md_display.lower())
-    for ref in references:
-        if not ref.get('doi'):
-            continue
-        display_doi, safe_name = process_doi(ref['doi'])
-        if display_doi.lower() not in seen:
-            final.append(f'[[{safe_name}|{display_doi}]]')
-            seen.add(display_doi.lower())
+    final.extend(new_doi_wikilinks((r['doi'] for r in references if r.get('doi')), seen))
     return final
 
 
@@ -62,13 +57,15 @@ def update_md_references(md_path: Path, references: List[Dict], main_doi: Option
     print(f'成功更新Markdown文件: {md_path}')
 
 
+_DASH_TABLE = str.maketrans('\u2010\u2011\u2013\u2014\u2015', '-----')
+
+
 def _extract_doi_from_pdf(pdf_path: Path) -> Optional[str]:
     try:
         with pdfplumber.open(pdf_path) as pdf:
             for page in pdf.pages:
-                text = (page.extract_text() or '').translate(
-                    str.maketrans('\u2010\u2011\u2013\u2014\u2015', '-----'))
-                if dois := [d for d in PATTERN_DOI.findall(repair_doi_text(text)) if is_plausible_doi(d)]:
+                text = (page.extract_text() or '').translate(_DASH_TABLE)
+                if dois := find_plausible_dois(repair_doi_text(text)):
                     return dois[0]
     except Exception as e:
         print(f'PDF提取主DOI失败: {e}')
@@ -81,10 +78,9 @@ def _get_main_doi(pdf_path: Optional[Path], content: Optional[str], fm: Optional
     if pdf_path and pdf_path.exists() and (doi := _extract_doi_from_pdf(pdf_path)):
         return process_doi(doi)[0]
     if content:
-        for line in content.splitlines():
-            if line.strip().lower().startswith('doi:') and (m := PATTERN_DOI.search(line)):
-                return process_doi(m.group(0))[0]
-        if dois := [d for d in PATTERN_DOI.findall(content) if is_plausible_doi(d)]:
+        if doi := doi_from_doi_line(content):
+            return doi
+        if dois := find_plausible_dois(content):
             return process_doi(dois[0])[0]
     return None
 

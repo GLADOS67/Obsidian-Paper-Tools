@@ -5,15 +5,14 @@ wikilinks, resolves names, populates 被引/正向/负向 frontmatter fields.
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from core.doi import (PATTERN_DOI, PATTERN_SAFE_DOI, UNICODE_DASH_TABLE,
+from core.doi import (PATTERN_DOI, PATTERN_SAFE_DOI, find_plausible_dois,
                        is_plausible_doi, normalize_unicode_dashes, process_doi,
                        repair_doi_text)
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.markdown_utils import clean_markdown_body
 from core.refs import split_wikilink
 
-Slot = Tuple[Optional[str], List[str]]
-DoiEntry = Tuple[Slot, Slot]
+DoiEntry = List  # [[ref_spec, ref_stems_dict], [cb_spec, cb_stems_dict]]
 
 
 def _shared_spec(entry: Optional[DoiEntry]) -> Optional[str]:
@@ -40,20 +39,19 @@ def _update_doi_map(display_doi: str, name_part: str,
                     unique_map: Dict[str, DoiEntry],
                     citing_stem: str, slot: int = 0) -> Tuple[str, bool]:
     is_special = not PATTERN_SAFE_DOI.match(name_part)
-    safe_name = process_doi(display_doi)[1]
     key = display_doi.lower()
-    (ref_spec, ref_stems), (cb_spec, cb_stems) = unique_map.get(key, ((None, []), (None, [])))
-    spec_add = name_part if is_special else None
-    if slot == 0:
-        ref_spec, ref_stems = ref_spec or spec_add, ref_stems if citing_stem in ref_stems else ref_stems + [citing_stem]
-    else:
-        cb_spec, cb_stems = cb_spec or spec_add, cb_stems if citing_stem in cb_stems else cb_stems + [citing_stem]
-    unique_map[key] = ((ref_spec, ref_stems), (cb_spec, cb_stems))
-    return (ref_spec or cb_spec or safe_name), is_special
+    entry = unique_map.get(key)
+    if entry is None:
+        entry = unique_map[key] = [[None, {}], [None, {}]]
+    if not entry[slot][0]:
+        entry[slot][0] = name_part if is_special else None
+    entry[slot][1][citing_stem] = None
+    return (entry[0][0] or entry[1][0] or process_doi(display_doi)[1]), is_special
 
 
-def _process_references(refs: List, unique_map: Dict[str, DoiEntry],
-                        citing_stem: str, is_existing: bool = True) -> Tuple[List[str], int]:
+def _rebuild_reference_list(refs: List, unique_map: Dict[str, DoiEntry],
+                            citing_stem: Optional[str] = None,
+                            is_existing: bool = True) -> Tuple[List[str], int]:
     if not refs:
         return [], 0
     special_count = 0
@@ -77,42 +75,18 @@ def _process_references(refs: List, unique_map: Dict[str, DoiEntry],
         if not is_plausible_doi(display_doi):
             continue
         dedup_key = display_doi.lower()
-        if dedup_key not in seen:
-            seen.add(dedup_key)
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        if citing_stem is None:
+            spec = _shared_spec(unique_map.get(dedup_key))
+            used_name = spec or (process_doi(display_doi)[1]
+                                 if PATTERN_SAFE_DOI.match(name_part) else name_part)
+        else:
             used_name, is_special = _update_doi_map(display_doi, name_part, unique_map, citing_stem)
-            if is_special:
-                special_count += 1
-            result.append(f'[[{used_name}|{display_doi}]]')
+            special_count += is_special
+        result.append(f'[[{used_name}|{display_doi}]]')
     return result, special_count
-
-
-def _resolve_refs_final(refs, unique_map):
-    if not refs:
-        return []
-    seen = set()
-    result = []
-    for item in refs:
-        ref = item.strip()
-        if not ref:
-            continue
-        parsed = _split_wikilink(ref)
-        if parsed is None:
-            key = ref.lower()
-            if key not in seen:
-                seen.add(key)
-                result.append(ref)
-            continue
-        name_part, display_doi = parsed
-        if not is_plausible_doi(display_doi):
-            continue
-        is_special = not PATTERN_SAFE_DOI.match(name_part)
-        spec = _shared_spec(unique_map.get(display_doi.lower()))
-        used_name = spec or (name_part if is_special else process_doi(display_doi)[1])
-        dedup_key = display_doi.lower()
-        if dedup_key not in seen:
-            seen.add(dedup_key)
-            result.append(f'[[{used_name}|{display_doi}]]')
-    return result
 
 
 def _resolve_cited_by(cited: List, unique_map: Dict[str, DoiEntry]) -> List[str]:
@@ -160,10 +134,9 @@ def _process_unhandled_file(file: Path, content: str, fm: Dict, rest: str,
     removed = ','.join(k for k in ('author', 'published') if fm.pop(k, None) is not None)
     if removed:
         print(f'    🗑️  删除 {file.name} 字段：{removed}')
-    unique_dois = list({doi.lower(): doi for doi in PATTERN_DOI.findall(repair_doi_text(content))
-                        if is_plausible_doi(doi)}.values())
-    doi_refs = [process_doi(doi) for doi in unique_dois]
-    refs, special_count = _process_references(doi_refs, unique_map, file.stem, is_existing=False)
+    unique_dois = {doi.lower(): doi for doi in find_plausible_dois(repair_doi_text(content))}
+    doi_refs = [process_doi(doi) for doi in unique_dois.values()]
+    refs, special_count = _rebuild_reference_list(doi_refs, unique_map, file.stem, is_existing=False)
     if refs:
         fm['reference'] = refs
         print(f'    ✅ 添加 {len(refs)} 个DOI')
@@ -200,7 +173,7 @@ def run_markdown_graph(directory: str) -> None:
                 cited_by_map[dl][1].append(file.stem)
             _update_doi_map(disp, name, unique_map, file.stem, slot=1)
         if 'aliases' in fm or 'reference' in fm:
-            processed_refs, special_count = _process_references(
+            processed_refs, special_count = _rebuild_reference_list(
                 fm.get('reference', []), unique_map, file.stem, is_existing=True)
             fm['reference'] = processed_refs
             fm['特殊引用数'] = special_count
@@ -215,8 +188,7 @@ def run_markdown_graph(directory: str) -> None:
     print('\n开始计算引用关系和引用情况并保存文件...')
 
     for file, fm, rest in files_data:
-        refs = fm.get('reference', [])
-        refs = _resolve_refs_final(refs, unique_map)
+        refs, _ = _rebuild_reference_list(fm.get('reference', []), unique_map)
         fm['reference'] = refs
         if fm.get('cited_by'):
             fm['cited_by'] = _resolve_cited_by(fm['cited_by'], unique_map)

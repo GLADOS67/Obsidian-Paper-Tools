@@ -65,7 +65,7 @@ def _match_prop(fm, prop, display, index_map, stem, clip_name, force):
 
 
 def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_THRESHOLD,
-              force: bool = False, verbose: bool = False) -> None:
+              force: bool = False, verbose: bool = False) -> bool:
     base = Path(base_dir)
     clip_dir = base / 'Clippings'
     chi_dir = base / 'Chi'
@@ -135,13 +135,14 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
             clip_src = (fm.get('source') or '').strip().lower().rstrip('/')
             clip_refs = fm.get('reference', [])
             clip_fr = _first_ref_target(clip_refs)
-            clip_dois = _extract_doi_set(clip_refs)
+            clip_dois = None
             chi_path = None; method = ''; score = 0.0
             if clip_src and clip_src in by_source:
                 chi_path, method, score = by_source[clip_src], 'source', 1.0
             elif clip_fr and clip_fr in by_first_ref:
                 chi_path, method, score = by_first_ref[clip_fr], 'first_ref', 1.0
             else:
+                clip_dois = _extract_doi_set(clip_refs)
                 for chi_p, chi_dois in chi_doi_sets.items():
                     s = _jaccard(clip_dois, chi_dois)
                     if s > score:

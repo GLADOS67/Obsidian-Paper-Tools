@@ -2,6 +2,7 @@
 Uses PyYAML with CSafeLoader/CSafeDumper when available for speed.
 """
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -47,3 +48,14 @@ def dump_frontmatter(fm: Dict, body: str) -> str:
                              default_flow_style=False, Dumper=_YamlDumper).rstrip('\n')
         return f'---\n{yaml_str}\n---\n{body}'
     return body
+
+
+def cited_by_fresh(fm: Dict, days: int = 30) -> bool:
+    val = fm.get('cited_by_date')
+    if not val:
+        return False
+    try:
+        last = datetime.strptime(str(val)[:10], '%Y-%m-%d')
+    except ValueError:
+        return False
+    return (datetime.now() - last).days < days

@@ -15,12 +15,8 @@ def _norm(s: str) -> str:
     return re.sub(r'[-\u2013\u2014]', '-', s)
 
 
-PATTERN_IMG_ABS = re.compile(
-    r'(!\[[^\]]*\])\([A-Z]:[\\/].*?images[\\/]([a-f0-9]+\.(?:jpg|png|jpeg|gif))\)',
-    re.IGNORECASE,
-)
-PATTERN_IMG_REL = re.compile(
-    r'(!\[[^\]]*\])\(\.\.[\\/]images[\\/]([a-f0-9]+\.(?:jpg|png|jpeg|gif))\)',
+PATTERN_IMG = re.compile(
+    r'(!\[[^\]]*\])\((?:[A-Z]:[\\/].*?images|\.\.[\\/]images)[\\/]([a-f0-9]+\.(?:jpg|png|jpeg|gif))\)',
     re.IGNORECASE,
 )
 PATTERN_WIKILINK = re.compile(r'\[\[([^\]|]+)')
@@ -60,9 +56,10 @@ def _fix_image_paths(md_file: Path, src_images: Path, dst_images: Path) -> int:
         return 0
     prefix = Path(os.path.relpath(dst_images, md_file.parent)).as_posix() + '/'
     counter = [0]
-    kwargs = {'src_images': src_images, 'dst_images': dst_images, 'prefix': prefix, 'counter': counter}
-    content = PATTERN_IMG_ABS.sub(lambda m: _replace_img(m, **kwargs), content)
-    content = PATTERN_IMG_REL.sub(lambda m: _replace_img(m, **kwargs), content)
+    content = PATTERN_IMG.sub(
+        lambda m: _replace_img(m, src_images=src_images, dst_images=dst_images,
+                               prefix=prefix, counter=counter),
+        content)
     if counter[0]:
         md_file.write_text(content, encoding='utf-8')
     return counter[0]

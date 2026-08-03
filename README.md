@@ -4,7 +4,7 @@
 
 ---
 
-# Obsidian-Paper-Tools 2.1 — 卢布林合并
+# Obsidian-Paper-Tools 2.2 — 卢布林合并
 
 > Obsidian. Our Vault. 🔗 Links. 🧠 Graph. 📂 Open formats.
 > Our way of research.
@@ -371,7 +371,7 @@ MIT
 
 **作者：** Li Kan <lik1453529@163.com>
 
-# Obsidian-Paper-Tools 2.1 — 卢布林合并
+# Obsidian-Paper-Tools 2.2 — 卢布林合并
 
 > Obsidian。Our Vault。🔗 双向链接。🧠 关系图谱。📂 开放格式。
 > 我们的科研之道。
@@ -734,27 +734,35 @@ MIT
 
 ---
 
-## 增量对比 (vs v2.0)
+## 增量对比 (vs v2.1)
 
-v2.1 与 v2.0 的 `*.py`、`*.toml`、`*.md` 文件逐行对比结果。唯一新增文件为 `clean_cache.py`（Crossref 缓存清洗工具）；无文件移除。其余改动均为对既有文件的修改。另 `scripts/PDF2MD.bat`、`scripts/PDF2MD-LOCAL.bat` 因 `--path_images` 参数同步更新（`.bat` 不在本次对比范围内）。
+v2.1 → v2.2 对 `*.py`、`*.toml`、`*.md` 文件逐行对比结果。**无新增文件、无移除文件**；20 个 Python 文件中 7 个逐字一致（`config.py`、`commands/remove_doi.py`、`commands/trash.py`、`commands/__init__.py`、`core/markdown_utils.py`、`core/obsidian_path.py`、`core/__init__.py`），`pyproject.toml` 逐字一致。核心主题：**文献年代闸门（`ref_max_age`）**、公共 DOI/wikilink 工具函数下沉复用。
 
-| 维度 | v2.0 | v2.1 |
+| 维度 | v2.1 | v2.2 |
 | --- | --- | --- |
-| **新增文件** | — | `clean_cache.py`（Crossref 缓存清洗） |
-| **移除文件** | — | — |
-| **README.md** | 末尾含「增量对比 (vs v2.0)」章节；未提及缓存清洗与 `--path_images` | 删除 v2.0 对比章节；新增 `--path_images` 参数说明与 `clean_cache.py` 结构条目；移除 `commands/pdf2md_local.py` 残留条目；中英文 tagline 均加入「Crossref 缓存清洗」 |
-| **clean_cache.py** | — | 新增：加载 `crossref_cache.json`，移除 `cite:null` 条目，`process_doi` 归一化 DOI key，合并 `citedby:`/`pm_citedby:`/`pm_citedby_list:` 与 DOI references 重复键并去重，备份 `.json.bak` 后写回 |
-| **cli.py** | 无 `--path_images`；`pdf2md`/`pdf2md-local` 调用 `run_pdf2md(...)` 不传 images 参数 | 新增 `--path_images` 参数（默认 None）；两个命令均透传 `path_images=args.path_images`；模块 docstring 注明新参数 |
-| **commands/__init__.py** | 文档字符串含 `pdf2md-local: Standalone pdfplumber offline PDF→MD shortcut` 条目 | 删除 `pdf2md-local` 模块条目（已并入 `pdf2md --local`） |
-| **commands/pdf2md.py** | `_mark_pdf_done` 6 次重试 + rstrtmgr 占用进程检测；上传用裸 `open(f,'rb')` 句柄；图片目录固定为 `path_md0/images` | 删除 `_find_locking_processes`/`_report_lock`（约 70 行）；`_mark_pdf_done` 单次尝试、失败直接移入 TRASH；上传改用 `with open(...)` 及时释放句柄；`run_pdf2md`/`download_and_process_batch` 新增 `path_images`/`images_output` 支持自定义图片目录；Crossref 标题回退无结果时打印提示 |
-| **core/crossref_api.py** | `data is None` 时仍访问 `.get`；无匹配时写 `cache[key]=None` | `data is None` 打印「Crossref API请求失败」并直接返回 None；无匹配打印提示且不再写 None 缓存；结果无 DOI 时打印提示 |
-| **pyproject.toml** | description 含 "PyMuPDF rename, Crossref DOI references" | description 插入 "Crossref cache cleaner"（位于 Crossref DOI references 之前） |
-| **config.py / core/doi.py / core/frontmatter.py / core/markdown_utils.py / core/obsidian_path.py / core/refs.py / core/__init__.py / commands/archive.py / cited_by.py / crossref.py / markdown_graph.py / match.py / remove_doi.py / rename_pdf.py / trash.py** | — | 逐字一致（共 15 个） |
+| **新增文件** | — | 无 |
+| **移除文件** | 无 | — |
+| **commands/pdf2md.py** | 顺序上传；无条件添加 reference/cited_by；内置 Clippings 模糊匹配索引；内联 DOI→wikilink 转换 | 新增 `--ref_max_age`（默认15年）「首发日期闸门」：老论文只钉主 DOI 不膨胀引用；上传改 `ThreadPoolExecutor(max_workers=5)` 并行；删除 Clippings 模糊匹配索引（约50行）；复用 `find_plausible_dois`/`new_doi_wikilinks`/`cited_by_fresh`/`doi_wikilink` |
+| **commands/cited_by.py** | 内联 freshness 检查 + 内联 DOI→wikilink 构建 | 改用 `cited_by_fresh()` 与 `doi_wikilink()`；`_get_main_doi_from_md` 改用 `doi_from_doi_line()`；移除 `timedelta` 导入 |
+| **commands/crossref.py** | 内联引用 wikilink 循环；重复构建翻译表 | `_build_ref_list` 改用 `new_doi_wikilinks()`；提取模块级 `_DASH_TABLE`；PDF/正文 DOI 提取改用 `find_plausible_dois`/`doi_from_doi_line` |
+| **commands/markdown_graph.py** | `Slot`/`DoiEntry` 元组结构；`_process_references`+`_resolve_refs_final` 双函数 | `DoiEntry` 改为 `List`+dict 型 stems；合并为单一 `_rebuild_reference_list()`（支持可选 `citing_stem` 最终解析）；`_update_doi_map` 改用 dict 去重；删除 `_resolve_refs_final` |
+| **commands/match.py** | 无条件计算 `clip_dois` | `run_match` 返回类型 `None`→`bool`；`clip_dois` 惰性计算（仅在 jaccard 兜底分支需要时提取） |
+| **commands/archive.py** | `PATTERN_IMG_ABS` + `PATTERN_IMG_REL` 双正则两次替换 | 合并为单一 `PATTERN_IMG`（绝对/相对路径二选一），单次 `.sub` 替换 |
+| **commands/rename_pdf.py** | 每个字号循环内重复过滤上半页 | 提前提取 `top_spans`（y<0.55 页高），循环复用（等效性能微优化） |
+| **core/doi.py** | 内联 re.sub 清理；散落各处重复的「筛选+plausible 判定」逻辑 | 新增 `find_plausible_dois()`、`doi_from_doi_line()`、`doi_wikilink()`；清理正则预编译为 `_RE_URL_SPLIT`/`_RE_ID_TAIL`/`_RE_YEAR_OR_DOTS_TAIL` |
+| **core/refs.py** | 仅 wikilink 解析/去重工具 | 新增 `new_doi_wikilinks(dois, seen)` 统一「DOI→去重→wikilink」；删除文档字符串；引入 `process_doi` 依赖 |
+| **core/frontmatter.py** | 无 freshness 工具 | 新增 `cited_by_fresh(fm, days=30)`（原散落在 pdf2md.py/cited_by.py 内联逻辑上收） |
+| **core/crossref_api.py** | 仅参考文献/引用计数 | 新增 `get_issued_year()`/`_extract_issued_year()`，缓存键 `issued:{doi}`；`fetch_references` 顺带复用同一响应写入年份缓存，避免二次请求 |
+| **clean_cache.py** | `_should_keep_doi` 过滤 + 内联清洗 | 删除 `_should_keep_doi`/`DOI_PREFIX_RE`；`_clean_doi_key` 简化为 `process_doi(raw)[0]`；`shutil` 上提至顶层 |
+| **cli.py** | 无 `--ref_max_age`；`_cmd_remove_doi` 用 else 打印 | 新增 `--ref_max_age`（默认15）并透传两个 pdf2md 命令；`_cmd_remove_doi` 改 early-return；移除未用 `Path` 导入 |
+| **README.md** | 含「增量对比 (vs v2.0)」章节 | 删除 v2.0 对比章节；新增强化描述（`--ref_max_age`）；本文档末尾追加 (vs v2.1) 对比 |
+| **pyproject.toml** | — | 逐字一致 |
+| **config.py / core/markdown_utils.py / core/obsidian_path.py / commands/remove_doi.py / commands/trash.py / commands/__init__.py / core/__init__.py** | — | 逐字一致（7 个） |
 
 ### 关键变化
 
-- **新增缓存清洗工具**：新增 `clean_cache.py`，一键清洗 `crossref_cache.json`——移除 `cite:null` 空值、用 `process_doi` 归一化 DOI key、合并 `citedby:`/`pm_citedby:`/`pm_citedby_list:` 与普通 DOI references 的重复键，写回前备份 `.json.bak`。
-- **自定义图片目录**：`cli.py`、`commands/pdf2md.py` 新增 `--path_images` 参数，`pdf2md` 与 `pdf2md-local` 均可将 MinerU 图片输出到自定义目录（默认仍为 `path_md0/images`）。
-- **健壮性简化**：`commands/pdf2md.py` 删除约 70 行 Windows Restart Manager 占用进程检测（`_find_locking_processes`/`_report_lock`），`_mark_pdf_done` 由 6 次重试改为单次尝试、失败直接移入 TRASH；上传改用 `with open(...)` 立即释放文件句柄。
-- **Crossref API 诊断**：`core/crossref_api.py` 对 `data is None`、无匹配结果、结果无 DOI 三种情况分别打印诊断信息，且不再向缓存写入 `None`。
-- **文档同步**：README 中英文版本加入「Crossref 缓存清洗」与 `--path_images` 参数说明，移除 v2.0 对比章节及 `commands/pdf2md_local.py` 残留结构条目；`pyproject.toml` description 同步补充 "Crossref cache cleaner"。
+- **文献年代闸门（核心新特性）**：`pdf2md` 新增 `--ref_max_age`（默认 15 年）。主 DOI 首发年份距今超过阈值时仅钉住主 DOI，跳过 `_merge_new_dois` 与 Crossref 参考文献追加，避免老文献引用膨胀；年份通过 `core/crossref_api.get_issued_year()` 获取，`fetch_references` 已顺带缓存同响应中的年份，免二次请求。
+- **上传并行化**：MinerU 批次上传由顺序 for 循环改为 `ThreadPoolExecutor(max_workers=5)` + `_upload_one` 辅助函数。
+- **公共工具下沉**：`find_plausible_dois`/`doi_from_doi_line`/`doi_wikilink`（core/doi.py）、`new_doi_wikilinks`（core/refs.py）、`cited_by_fresh`（core/frontmatter.py）将原散落在 pdf2md.py/cited_by.py/crossref.py/markdown_graph.py 的内联逻辑集中复用。
+- **markdown_graph 重构**：`_process_references` + `_resolve_refs_final` 合并为单一 `_rebuild_reference_list()`，`DoiEntry` 由元组结构改为 List+dict（去重键字典化），减少重复遍历。
+- **清理与精简**：pdf2md.py 删除 Clippings 模糊匹配索引（约 50 行）；archive.py 双图片正则合并；match.py 惰性计算 DOI 集合；clean_cache.py 移除 `_should_keep_doi`；cli.py 增加 early-return。

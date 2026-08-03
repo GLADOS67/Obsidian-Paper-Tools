@@ -2,10 +2,9 @@
 Integrates MinerU API (cloud PDF-to-Markdown), pdfplumber (local PDF-to-MD via --local flag),
 Crossref API (DOI references & citation lookup), PubMed E-utilities (cited-by queries),
 PyMuPDF title extraction (PDF rename), and YAML frontmatter for Obsidian wikilink citation graphs.
-Uses match/case dispatch (Python 3.10+). Includes --path_images for custom image output.
+Uses match/case dispatch (Python 3.10+). Includes --ref_max_age for cited-by freshness.
 """
 import argparse
-from pathlib import Path
 
 from commands.pdf2md import run_pdf2md
 from commands.markdown_graph import run_markdown_graph
@@ -27,10 +26,10 @@ def _add_api_args(parser, with_zip=True):
     parser.add_argument('--enable_api_references', action='store_true', default=True)
     parser.add_argument('--enable_cited_by', action='store_true', default=True)
     parser.add_argument('--cited_by_max', type=int, default=10)
+    parser.add_argument('--ref_max_age', type=int, default=15)
 
 
 def _cmd_remove_doi(args):
-    target = Path(args.path)
     doi = args.doi or input('输入要移除的错误DOI: ').strip()
     if not doi:
         print('未输入DOI')
@@ -38,9 +37,9 @@ def _cmd_remove_doi(args):
     modified = run_remove_doi(args.path, doi)
     if not modified:
         print('未找到匹配')
-    else:
-        for p, c in modified:
-            print(f'  [{c}行] {p.name}')
+        return
+    for p, c in modified:
+        print(f'  [{c}行] {p.name}')
 
 
 def main():
@@ -90,11 +89,13 @@ def main():
         case 'pdf2md':
             run_pdf2md(args.path_pdf, args.path_zip, args.path_md0,
                        args.enable_api_references, args.enable_cited_by, args.cited_by_max,
-                       local=args.local, path_images=args.path_images)
+                       local=args.local, path_images=args.path_images,
+                       ref_max_age=args.ref_max_age)
         case 'pdf2md-local':
             run_pdf2md(args.path_pdf, None, args.path_md0,
                        args.enable_api_references, args.enable_cited_by, args.cited_by_max,
-                       local=True, path_images=args.path_images)
+                       local=True, path_images=args.path_images,
+                       ref_max_age=args.ref_max_age)
         case 'markdown':
             run_markdown_graph(args.path)
         case 'crossref':

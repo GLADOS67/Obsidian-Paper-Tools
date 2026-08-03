@@ -77,6 +77,26 @@ def get_doi_from_citation(citation_text: str, cache: dict = None) -> Optional[Tu
     return result
 
 
+def _extract_issued_year(msg: dict) -> Optional[int]:
+    # 从Crossref message中提取首发年份: issued.date-parts = [[年, 月, 日]]
+    try:
+        return msg.get('issued', {}).get('date-parts', [[None]])[0][0]
+    except Exception:
+        return None
+
+
+def get_issued_year(doi: str, cache: dict = None) -> Optional[int]:
+    # 查询论文首发年份, 优先命中缓存(issued:{doi}), 查不到时缓存None避免重复请求
+    cache = {} if cache is None else cache
+    key = f'issued:{doi}'
+    if key in cache:
+        return cache[key]
+    data = _api_get(f'{CROSSREF_API_BASE}/{doi}', timeout=30)
+    year = _extract_issued_year(data.get('message', {})) if data else None
+    cache[key] = year
+    return year
+
+
 def fetch_references(doi: str, cache: dict = None) -> List[Dict]:
     cache = {} if cache is None else cache
     refs_key, citedby_key = doi, f'citedby:{doi}'
@@ -90,6 +110,8 @@ def fetch_references(doi: str, cache: dict = None) -> List[Dict]:
         return []
     msg = data.get('message', {})
     cache[citedby_key] = msg.get('is-referenced-by-count', 0)
+    # 复用本次请求顺带缓存首发年份, 供get_issued_year免二次请求
+    cache[f'issued:{doi}'] = _extract_issued_year(msg)
     refs = []
     for ref in msg.get('reference', []):
         ref_doi = ref.get('DOI')

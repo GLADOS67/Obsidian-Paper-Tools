@@ -3,25 +3,19 @@ Removes cite:null entries, normalizes DOI keys via process_doi, deduplicates mer
 keys (citedby:, pm_citedby:, DOI references). Works with core/doi.py and core/crossref_api.py.
 """
 import json
+import shutil
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from core.doi import process_doi, is_plausible_doi
-from core.crossref_api import CROSSREF_CACHE, load_cache, save_cache
+from core.doi import process_doi
+from core.crossref_api import CROSSREF_CACHE, load_cache
 
 
 def _clean_doi_key(raw: str):
-    display, safe = process_doi(raw)
-    return display
+    return process_doi(raw)[0]
 
-
-def _should_keep_doi(doi: str) -> bool:
-    return bool(doi) and is_plausible_doi(doi)
-
-
-DOI_PREFIX_RE = r'^(10\.\d{4,9}/)'
 
 CITEDBY_PREFIX = 'citedby:'
 PM_CITEDBY_PREFIX = 'pm_citedby:'
@@ -110,7 +104,6 @@ def main():
 
     bak = CROSSREF_CACHE.with_suffix('.json.bak')
     print(f'备份至: {bak}')
-    import shutil
     shutil.copy2(CROSSREF_CACHE, bak)
 
     cleaned_json = json.dumps(cleaned, ensure_ascii=False, indent=2)

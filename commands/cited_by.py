@@ -2,13 +2,14 @@
 Uses NCBI Entrez esearch/elink/esummary to find papers citing a given DOI,
 writes citing DOIs as wikilinks into Obsidian frontmatter cited_by field.
 """
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from core.crossref_api import get_cited_by_pubmed, load_cache, save_cache
-from core.doi import PATTERN_DOI, extract_doi_from_frontmatter, process_doi, repair_doi_text
-from core.frontmatter import dump_frontmatter, parse_frontmatter_str
+from core.doi import (PATTERN_DOI, doi_from_doi_line, doi_wikilink,
+                      extract_doi_from_frontmatter, process_doi, repair_doi_text)
+from core.frontmatter import cited_by_fresh, dump_frontmatter, parse_frontmatter_str
 from core.obsidian_path import resolve_input_path
 from core.refs import split_wikilink
 
@@ -30,10 +31,7 @@ def _get_main_doi_from_md(fm: dict, body: str) -> Optional[str]:
             return process_doi(m.group(0))[0]
     if m := PATTERN_DOI.search(repair_doi_text(body)):
         return process_doi(m.group(0))[0]
-    for line in body.splitlines():
-        if line.strip().lower().startswith('doi:') and (m := PATTERN_DOI.search(line)):
-            return process_doi(m.group(0))[0]
-    return None
+    return doi_from_doi_line(body)
 
 
 def _collect_existing_dois(md_dir: Path) -> set:
@@ -82,26 +80,16 @@ def run_cited_by(path: str, max_rows: int = 10) -> None:
             print(f'[SKIP] {md_file.name}: 未提取到主DOI')
             continue
 
-        cited_by_date = fm.get('cited_by_date')
-        if cited_by_date:
-            try:
-                last = datetime.strptime(str(cited_by_date)[:10], '%Y-%m-%d')
-                if (datetime.now() - last).days < 30:
-                    print(f'[SKIP] {md_file.name}: cited_by_date={cited_by_date} (距今<1个月)')
-                    continue
-            except ValueError:
-                pass
+        if cited_by_fresh(fm):
+            print(f'[SKIP] {md_file.name}: cited_by_date={fm.get("cited_by_date")} (距今<1个月)')
+            continue
 
         count, citing_dois = get_cited_by_pubmed(main_doi, cache, existing_dois, max_rows)
         fm.pop('cited_by_count', None)
         fm['cited_by_date'] = datetime.now().strftime('%Y-%m-%d')
         if citing_dois:
-            refs = []
-            for d in citing_dois:
-                display, safe = process_doi(d)
-                refs.append(f'[[{safe}|{display}]]')
-                existing_dois.add(d.lower())
-            fm['cited_by'] = refs
+            fm['cited_by'] = [doi_wikilink(d) for d in citing_dois]
+            existing_dois.update(d.lower() for d in citing_dois)
             print(f'[OK] {md_file.name}: cited_by_date={fm["cited_by_date"]}  新增 {len(citing_dois)} 篇')
         else:
             fm.pop('cited_by', None)

@@ -1,9 +1,6 @@
-"""/s: Wikilink reference utilities for Obsidian citation graphs.
-- split_wikilink: parse `[[name|display]]` into (name, display) tuple.
-- build_existing_dois: collect existing DOIs from reference lists.
-- process_existing_references: deduplicate & normalize wikilink references.
-"""
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
+
+from core.doi import process_doi
 
 
 def split_wikilink(ref: str) -> Optional[Tuple[str, str]]:
@@ -14,6 +11,17 @@ def split_wikilink(ref: str) -> Optional[Tuple[str, str]]:
         return None
     name, display = inner.split('|', 1)
     return name.strip(), display.strip()
+
+
+def new_doi_wikilinks(dois: Iterable[str], seen: set) -> List[str]:
+    refs = []
+    for raw in dois:
+        display, safe = process_doi(raw)
+        key = display.lower()
+        if key not in seen:
+            refs.append(f'[[{safe}|{display}]]')
+            seen.add(key)
+    return refs
 
 
 def build_existing_dois(references: List[str]) -> set:

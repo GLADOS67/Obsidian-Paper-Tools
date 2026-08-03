@@ -5,7 +5,7 @@
 """
 import re
 from functools import lru_cache
-from typing import Tuple
+from typing import List, Optional, Tuple
 
 NORMAL_END_CHARS = '。,， \t\n;：:'
 OPEN_PARENS = '（('
@@ -30,6 +30,9 @@ PATTERN_FS_INVALID = re.compile(r'[\\:*?"<>|]')
 PATTERN_COLLAPSE = re.compile(r'[￥_\s]+')
 PATTERN_DOI_SPLICE = re.compile(r'(?<=[/\-._;():])\s(?=[-A-Za-z0-9._;()/:])', re.IGNORECASE)
 PATTERN_PURE_ALPHA_SUFFIX = re.compile(r'^10\.\d{4,9}/[A-Za-z]+$', re.IGNORECASE)
+_RE_URL_SPLIT = re.compile(r'https?://')
+_RE_ID_TAIL = re.compile(r'\.?\(?(?:PMID|PMCID):?\s*\d+\)?\.?$', re.IGNORECASE)
+_RE_YEAR_OR_DOTS_TAIL = re.compile(r'\(\d{4}\)\.?$|\.+$')
 
 UNICODE_DASH_TABLE = str.maketrans('\u2010\u2011\u2013\u2014', '----')
 PDF_ARTIFACTS = str.maketrans('', '', '\u200b\u200c\u200d\ufeff\u00ad\u200e\u200f\u2028\u2029')
@@ -58,9 +61,9 @@ def normalize_unicode_dashes(text: str) -> str:
 
 @lru_cache(maxsize=4096)
 def process_doi(doi_raw: str) -> Tuple[str, str]:
-    doi_clean = re.split(r'https?://', doi_raw.strip(), maxsplit=1)[0]
-    doi_clean = re.sub(r'\.?\(?(?:PMID|PMCID):?\s*\d+\)?\.?$', '', doi_clean, flags=re.IGNORECASE)
-    doi_clean = re.sub(r'\(\d{4}\)\.?$|\.+$', '', doi_clean)
+    doi_clean = _RE_URL_SPLIT.split(doi_raw.strip(), maxsplit=1)[0]
+    doi_clean = _RE_ID_TAIL.sub('', doi_clean)
+    doi_clean = _RE_YEAR_OR_DOTS_TAIL.sub('', doi_clean)
     doi_clean = doi_clean.strip().rstrip(NORMAL_END_CHARS)
     if not any(p in doi_clean for p in OPEN_PARENS):
         doi_clean = PATTERN_TAIL_PARENS.sub('', doi_clean)
@@ -83,7 +86,23 @@ def is_plausible_doi(doi: str) -> bool:
     return not PATTERN_PURE_ALPHA_SUFFIX.match(doi.strip())
 
 
+def find_plausible_dois(text: str) -> List[str]:
+    return [d for d in PATTERN_DOI.findall(text) if is_plausible_doi(d)]
+
+
+def doi_from_doi_line(content: str) -> Optional[str]:
+    for line in content.splitlines():
+        if line.strip().lower().startswith('doi:') and (m := PATTERN_DOI.search(line)):
+            return process_doi(m.group(0))[0]
+    return None
+
+
 def make_wikilink(doi: str) -> str:
     doi = doi.strip().rstrip('.,;:')
     safe = doi.replace('/', '￥')
     return f'[[{safe}|{doi}]]'
+
+
+def doi_wikilink(doi_raw: str) -> str:
+    display, safe = process_doi(doi_raw)
+    return f'[[{safe}|{display}]]'

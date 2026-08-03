@@ -125,8 +125,9 @@ def _get_first_page_title(doc):
     if not spans:
         return None
     sizes = sorted(set(s['size'] for s in spans), reverse=True)
+    top_spans = [s for s in spans if s['y'] < page_h * 0.55]
     for sz in sizes:
-        same = [s for s in spans if abs(s['size'] - sz) < 0.5 and s['y'] < page_h * 0.55]
+        same = [s for s in top_spans if abs(s['size'] - sz) < 0.5]
         if not same:
             continue
         same.sort(key=lambda s: (s['y'], s['x']))
