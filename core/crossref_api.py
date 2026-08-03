@@ -61,12 +61,17 @@ def get_doi_from_citation(citation_text: str, cache: dict = None) -> Optional[Tu
         'rows': 1, 'mailto': 'lik1453529@wmu.edu.cn', 'query': citation_text,
     })
     time.sleep(random.uniform(1.0, 2.0))
-    items = (data or {}).get('message', {}).get('items', [])
+    if data is None:
+        print(f'Crossref API请求失败: {citation_text[:80]}')
+        return None
+    items = data.get('message', {}).get('items', [])
     if not items:
-        cache[key] = None
+        print(f'Crossref无匹配结果: {citation_text[:80]}')
         return None
     doi = items[0].get('DOI')
     title = (items[0].get('title') or [''])[0]
+    if not doi:
+        print(f'Crossref结果无DOI: {title[:80]}')
     result = (doi, title) if doi else None
     cache[key] = result
     return result

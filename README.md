@@ -4,7 +4,7 @@
 
 ---
 
-# Obsidian-Paper-Tools 2.0 — 卢布林合并
+# Obsidian-Paper-Tools 2.1 — 卢布林合并
 
 > Obsidian. Our Vault. 🔗 Links. 🧠 Graph. 📂 Open formats.
 > Our way of research.
@@ -36,7 +36,7 @@
 >
 > BECOME A VAULTTOOLER.
 >
-> *— Cloud & local PDF-to-Markdown · DOI citation graph · Crossref/PubMed API · PyMuPDF rename · note matching & archiving*
+> *— Cloud & local PDF-to-Markdown · DOI citation graph · Crossref cache cleaner · PubMed API · PyMuPDF rename · note matching & archiving*
 
 ---
 
@@ -83,6 +83,7 @@ pip install .
 | `--path_pdf` | str | `C:\Vault\PDF` | PDF source directory |
 | `--path_zip` | str | `C:\Vault\ZIP` | ZIP download directory (cloud only) |
 | `--path_md0` | str | `C:\Vault\Claude\MDfrPDF` | Markdown output directory |
+| `--path_images` | str | None | Custom images directory (auto if None) |
 | `--enable_api_references` | bool | True | Fetch Crossref references for each paper |
 | `--enable_cited_by` | bool | True | Fetch PubMed cited-by data |
 | `--cited_by_max` | int | 10 | Max cited-by results per paper |
@@ -289,20 +290,20 @@ DEFAULT_MD_PATH = Path(r'C:\Vault\Claude\MDfrPDF')
 ## Project Structure
 
 ```
-├── cli.py                 # Entry point (argparse)
-├── config.py              # Global path constants
+├── cli.py                 # Entry point (argparse) / 入口
+├── config.py              # Global path constants / 全局路径常量
+├── clean_cache.py         # Crossref cache cleaner / Crossref 缓存清洗
 ├── pyproject.toml
 ├── commands/
-│   ├── pdf2md.py          # MinerU batch pipeline
-│   ├── pdf2md_local.py    # pdfplumber offline pipeline
-│   ├── rename_pdf.py      # PyMuPDF title rename
-│   ├── markdown_graph.py  # DOI citation graph builder
-│   ├── crossref.py        # Crossref reference tool
-│   ├── match.py           # PA/PT/FE matcher
-│   ├── trash.py           # Directory archiver
-│   ├── remove_doi.py      # DOI removal
-│   ├── cited_by.py        # PubMed cited-by query
-│   └── archive.py         # Vault-to-vault archiver
+│   ├── pdf2md.py          # MinerU batch pipeline / 批处理管道
+│   ├── rename_pdf.py      # PyMuPDF title rename / 标题重命名
+│   ├── markdown_graph.py  # DOI citation graph builder / DOI 引用图谱
+│   ├── crossref.py        # Crossref reference tool / Crossref 参考文献
+│   ├── match.py           # PA/PT/FE matcher / PA/PT/FE 匹配器
+│   ├── trash.py           # Directory archiver / 目录归档
+│   ├── remove_doi.py      # DOI removal / DOI 移除
+│   ├── cited_by.py        # PubMed cited-by query / PubMed cited-by
+│   └── archive.py         # Vault-to-vault archiver / Vault 间归档
 ├── core/
 │   ├── crossref_api.py    # Crossref + PubMed E-utilities API
 │   ├── doi.py             # DOI regex / repair / canonicalization
@@ -370,7 +371,7 @@ MIT
 
 **作者：** Li Kan <lik1453529@163.com>
 
-# Obsidian-Paper-Tools 2.0 — 卢布林合并
+# Obsidian-Paper-Tools 2.1 — 卢布林合并
 
 > Obsidian。Our Vault。🔗 双向链接。🧠 关系图谱。📂 开放格式。
 > 我们的科研之道。
@@ -402,7 +403,7 @@ MIT
 >
 > 成为 VAULTTOOLER。
 >
-> *— 云端与本地 PDF 转 Markdown · DOI 引用图谱 · Crossref/PubMed API · PyMuPDF 重命名 · 笔记匹配与归档*
+> *— 云端与本地 PDF 转 Markdown · DOI 引用图谱 · Crossref 缓存清洗 · PubMed API · PyMuPDF 重命名 · 笔记匹配与归档*
 
 ---
 
@@ -657,10 +658,10 @@ DEFAULT_MD_PATH = Path(r'C:\Vault\Claude\MDfrPDF')
 ```
 ├── cli.py                 # 入口 (argparse)
 ├── config.py              # 全局路径常量
+├── clean_cache.py         # Crossref 缓存清洗
 ├── pyproject.toml
 ├── commands/
 │   ├── pdf2md.py          # MinerU 批处理管道
-│   ├── pdf2md_local.py    # pdfplumber 本地管道
 │   ├── rename_pdf.py      # PyMuPDF 标题重命名
 │   ├── markdown_graph.py  # DOI 引用图谱构建
 │   ├── crossref.py        # Crossref 参考文献工具
@@ -735,37 +736,25 @@ MIT
 
 ## 增量对比 (vs v2.0)
 
-v2.0 与 v2.0 的 `*.py`、`*.toml`、`*.md` 文件逐行对比结果。v2.0 无新增源文件，全部改动为对既有文件的修改；唯一移除文件为 `commands/pdf2md_local.py`（其逻辑并入 `pdf2md.py` 的 `--local` 分支）。
+v2.1 与 v2.0 的 `*.py`、`*.toml`、`*.md` 文件逐行对比结果。唯一新增文件为 `clean_cache.py`（Crossref 缓存清洗工具）；无文件移除。其余改动均为对既有文件的修改。另 `scripts/PDF2MD.bat`、`scripts/PDF2MD-LOCAL.bat` 因 `--path_images` 参数同步更新（`.bat` 不在本次对比范围内）。
 
-| 维度 | v2.0 | v2.0 |
+| 维度 | v2.0 | v2.1 |
 | --- | --- | --- |
-| **新增文件** | — | （无） |
-| **移除文件** | `commands/pdf2md_local.py` | — |
-| **README.md** | 含「增量对比 (vs v1.0)」章节；`pdf2md-local` 为独立命令 | 删除 v1.0 对比章节；`pdf2md` 新增 `--local` flag、`pdf2md-local` 改为其快捷命令；FAQ 7 改写；中英文档同步更新 |
-| **cli.py** | if/elif 分发；导入 `run_pdf2md_local`；各 parser 内联定义参数 | `match/case` 分发；删除 `run_pdf2md_local` 导入，`pdf2md-local` 转调 `run_pdf2md(local=True)`；新增 `_add_api_args()` 合并公共参数、`_cmd_remove_doi()` 辅助函数 |
-| **commands/__init__.py** | 描述 `pdf2md_local` 模块 | 更新为 `pdf2md --local` 回退与 `pdf2md-local` 快捷命令说明 |
-| **commands/archive.py** | `_find_clippings_dir`/`_find_vault` 内联遍历；`_fix_image_paths` 用 nonlocal 闭包 | 抽公共 `_find_parent()` 遍历；`_replace_img()` 模块级函数 + 列表计数替代闭包；新增 `PATTERN_WIKILINK` |
-| **commands/cited_by.py** | `_fm_main_doi` 本地实现；`_wikilink_doi` 嵌套 if | 改用 `core.doi.extract_doi_from_frontmatter`；条件表达式简化；双循环改推导式 |
-| **commands/crossref.py** | 用 `yaml` 手写 `_parse_front_matter`/`_write_md` | 改用 `core.frontmatter`；主 DOI 提取复用 `extract_doi_from_frontmatter`；多处加 `is_plausible_doi` 过滤；移除 `yaml` 依赖 |
-| **commands/markdown_graph.py** | 无 plausible 过滤；引用 stem 直接累加 | 多处 `is_plausible_doi` 过滤；`_update_doi_map` 引用去重；`被引` 排除自引用 |
-| **commands/match.py** | PA/FE 各写一份匹配代码；`_jaccard` 构造并集 | 抽公共 `_match_prop()` 复用；`_jaccard` 改为 `inter/(len(a)+len(b)-inter)`；`_first_ref_target` 非字符串兜底 |
-| **commands/pdf2md.py** | 仅 MinerU 云端管道；`_collect_all_dois`/`_extract_pdf_text`/`upload_file`/简单 `_mark_pdf_done` | 双模式管道：新增 `--local`、本地转换全套函数迁入、三路并行 DOI 提取、`multiprocessing` spawn 提取 PDF（60s 超时）、`_mark_pdf_done` 6 次重试 + rstrtmgr 锁检测、完成版 PDF 直接入 TRASH（不再 MATCH）、`_process_md_content` 返回布尔 |
-| **commands/rename_pdf.py** | 本地 `SMART_QUOTES`；无源文件过滤 | `SMART_QUOTE_TABLE` 移入 `core.doi`（新增 `–—…` 映射）；新增 `SOURCE_EXT_RE` 拒绝源文件扩展名标题；`_is_title_junk` 判定顺序调整 |
-| **commands/trash.py** | 无空目录保护 | 空目录早退提示；删除中间变量 `src` |
-| **core/crossref_api.py** | `CACHE_FILE`；固定 0.5s/1s sleep | 改名 `CROSSREF_CACHE` +【勿改】注释；随机 1-2s 延迟；`fetch_references` 重构 refs 组装；links 展开改 for 循环；删除 `_valid_citation_cache` |
-| **core/doi.py** | `PATTERN_TRAILING_DOT`/`PATTERN_TRAILING_PMID`/`sanitize_pdf_text` | 新增 `PATTERN_DOI_SPLICE`、`PATTERN_PURE_ALPHA_SUFFIX`、`SMART_QUOTE_TABLE`、`extract_doi_from_frontmatter`、`is_plausible_doi`；`process_doi` 重构（剥离 URL/PMID/年份、确定性文件名）；`repair_doi_text` 先 splice、5 轮提前 break |
-| **core/frontmatter.py** | 编码尝试 `utf-8/utf-8-sig/gbk/gb2312` 4 项 | 精简为 `utf-8/gbk` 2 项 + `.lstrip('\ufeff')` 处理 BOM |
-| **core/markdown_utils.py** | 4 个模块级辅助函数 | 全部内联为 `clean_markdown_body` 嵌套函数（行为等价） |
-| **core/refs.py** | `if x in seen: continue` | 改为 `if x not in seen:`（纯风格重构，逻辑等价） |
-
-> 逐字一致文件：`config.py`、`pyproject.toml`、`core/__init__.py`、`core/obsidian_path.py`、`commands/remove_doi.py`、`scripts/*.bat`（共 15 个）。
+| **新增文件** | — | `clean_cache.py`（Crossref 缓存清洗） |
+| **移除文件** | — | — |
+| **README.md** | 末尾含「增量对比 (vs v2.0)」章节；未提及缓存清洗与 `--path_images` | 删除 v2.0 对比章节；新增 `--path_images` 参数说明与 `clean_cache.py` 结构条目；移除 `commands/pdf2md_local.py` 残留条目；中英文 tagline 均加入「Crossref 缓存清洗」 |
+| **clean_cache.py** | — | 新增：加载 `crossref_cache.json`，移除 `cite:null` 条目，`process_doi` 归一化 DOI key，合并 `citedby:`/`pm_citedby:`/`pm_citedby_list:` 与 DOI references 重复键并去重，备份 `.json.bak` 后写回 |
+| **cli.py** | 无 `--path_images`；`pdf2md`/`pdf2md-local` 调用 `run_pdf2md(...)` 不传 images 参数 | 新增 `--path_images` 参数（默认 None）；两个命令均透传 `path_images=args.path_images`；模块 docstring 注明新参数 |
+| **commands/__init__.py** | 文档字符串含 `pdf2md-local: Standalone pdfplumber offline PDF→MD shortcut` 条目 | 删除 `pdf2md-local` 模块条目（已并入 `pdf2md --local`） |
+| **commands/pdf2md.py** | `_mark_pdf_done` 6 次重试 + rstrtmgr 占用进程检测；上传用裸 `open(f,'rb')` 句柄；图片目录固定为 `path_md0/images` | 删除 `_find_locking_processes`/`_report_lock`（约 70 行）；`_mark_pdf_done` 单次尝试、失败直接移入 TRASH；上传改用 `with open(...)` 及时释放句柄；`run_pdf2md`/`download_and_process_batch` 新增 `path_images`/`images_output` 支持自定义图片目录；Crossref 标题回退无结果时打印提示 |
+| **core/crossref_api.py** | `data is None` 时仍访问 `.get`；无匹配时写 `cache[key]=None` | `data is None` 打印「Crossref API请求失败」并直接返回 None；无匹配打印提示且不再写 None 缓存；结果无 DOI 时打印提示 |
+| **pyproject.toml** | description 含 "PyMuPDF rename, Crossref DOI references" | description 插入 "Crossref cache cleaner"（位于 Crossref DOI references 之前） |
+| **config.py / core/doi.py / core/frontmatter.py / core/markdown_utils.py / core/obsidian_path.py / core/refs.py / core/__init__.py / commands/archive.py / cited_by.py / crossref.py / markdown_graph.py / match.py / remove_doi.py / rename_pdf.py / trash.py** | — | 逐字一致（共 15 个） |
 
 ### 关键变化
 
-- **本地转换合并**：`commands/pdf2md_local.py` 整体删除，其 pdfplumber 转换与本地批处理逻辑迁入 `commands/pdf2md.py`，`pdf2md-local` 与 `pdf2md --local` 共用 `run_pdf2md(local=True)`（`scripts/PDF2MD-LOCAL.bat` 仍经 `cli.py pdf2md-local` 正常生效）。
-- **DOI 提取增强**：新增 `is_plausible_doi`（过滤 `10.xxxx/纯字母` 误报）与 `PATTERN_DOI_SPLICE`（拼接跨空格断行的 DOI）；`extract_doi_from_frontmatter` 抽为公共函数供 `pdf2md`/`cited_by`/`crossref` 复用。
-- **健壮性**：`_mark_pdf_done` 改为 6 次重试 + Windows Restart Manager 占用进程检测与报告；PDF 文本提取放入 spawn 子进程，60s 超时终止。
-- **性能**：MD/JSON/PDF 三路 DOI 提取由串行改为 `ThreadPoolExecutor` 并行；API 限流延迟由固定 0.5s/1s 改为随机 1-2s。
-- **行为差异**：`完成_` 前缀 PDF 不再执行 MATCH 后入 TRASH，改为直接移入 TRASH；`markdown` 的 `被引` 排除自引用；仅当本地无任何 DOI 时才触发 Crossref citation 查询；`_process_md_content` 返回成功布尔值，失败时不标记完成。
-- **依赖精简**：`commands/crossref.py` 移除直接 `yaml` 依赖；`core/frontmatter.py` 编码探测 4→2 项（BOM 用 lstrip 处理）。
-- **杂项**：CLI 分发 if/elif → `match/case`；`rename_pdf` 复用 `core.doi.SMART_QUOTE_TABLE`（比 v2.0 多 `–—…` 三种字符）并新增源文件扩展名过滤；README 删除 v2.0 遗留的「增量对比 (vs v1.0)」章节，但「项目结构」章节仍残留 `pdf2md_local.py` 条目（未同步，实际文件已删除）。
+- **新增缓存清洗工具**：新增 `clean_cache.py`，一键清洗 `crossref_cache.json`——移除 `cite:null` 空值、用 `process_doi` 归一化 DOI key、合并 `citedby:`/`pm_citedby:`/`pm_citedby_list:` 与普通 DOI references 的重复键，写回前备份 `.json.bak`。
+- **自定义图片目录**：`cli.py`、`commands/pdf2md.py` 新增 `--path_images` 参数，`pdf2md` 与 `pdf2md-local` 均可将 MinerU 图片输出到自定义目录（默认仍为 `path_md0/images`）。
+- **健壮性简化**：`commands/pdf2md.py` 删除约 70 行 Windows Restart Manager 占用进程检测（`_find_locking_processes`/`_report_lock`），`_mark_pdf_done` 由 6 次重试改为单次尝试、失败直接移入 TRASH；上传改用 `with open(...)` 立即释放文件句柄。
+- **Crossref API 诊断**：`core/crossref_api.py` 对 `data is None`、无匹配结果、结果无 DOI 三种情况分别打印诊断信息，且不再向缓存写入 `None`。
+- **文档同步**：README 中英文版本加入「Crossref 缓存清洗」与 `--path_images` 参数说明，移除 v2.0 对比章节及 `commands/pdf2md_local.py` 残留结构条目；`pyproject.toml` description 同步补充 "Crossref cache cleaner"。

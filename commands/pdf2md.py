@@ -1,7 +1,7 @@
 ﻿"""/s: MinerU API + pdfplumber dual-mode PDF-to-Markdown pipeline.
 Accepts --local flag for offline pdfplumber extraction (no MinerU upload); uploads PDFs
 to MinerU (mineru.net) otherwise. Enriches frontmatter with Crossref API references &
-PubMed cited-by data. Uses multiprocessing for parallel PDF handling.
+PubMed cited-by data. Supports --path_images for custom image output directory.
 """
 import json
 import multiprocessing
@@ -333,6 +333,8 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_ca
         if result:
             main_doi = process_doi(result[0])[0]
             print(f'Crossref标题回退确认主DOI: {main_doi}')
+        else:
+            print(f'Crossref标题回退无结果: {title}')
 
     if enable_cited_by and main_doi:
         if clippings_doi_set is None:
@@ -430,88 +432,12 @@ def _find_extracted_files(temp_dir):
     return md_src, img_src, json_src
 
 
-def _find_locking_processes(path):
-    import ctypes
-    from ctypes import wintypes
-
-    class FILETIME(ctypes.Structure):
-        _fields_ = [('dwLowDateTime', wintypes.DWORD),
-                    ('dwHighDateTime', wintypes.DWORD)]
-
-    class RM_UNIQUE_PROCESS(ctypes.Structure):
-        _fields_ = [('dwProcessId', wintypes.DWORD),
-                    ('ProcessStartTime', FILETIME)]
-
-    class RM_PROCESS_INFO(ctypes.Structure):
-        _fields_ = [('Process', RM_UNIQUE_PROCESS),
-                    ('strAppName', wintypes.WCHAR * 256),
-                    ('strServiceShortName', wintypes.WCHAR * 64),
-                    ('ApplicationType', ctypes.c_uint),
-                    ('AppStatus', ctypes.c_ulong),
-                    ('TSSessionId', wintypes.DWORD),
-                    ('bRestartable', wintypes.BOOL)]
-
-    ERROR_MORE_DATA = 234
-    try:
-        rm = ctypes.WinDLL('rstrtmgr')
-    except Exception:
-        return []
-    session = wintypes.DWORD()
-    key = (ctypes.c_wchar * 33)()
-    if rm.RmStartSession(ctypes.byref(session), 0, key) != 0:
-        return []
-    try:
-        resources = (ctypes.c_wchar_p * 1)(str(path))
-        if rm.RmRegisterResources(session, 1, resources, 0, None, 0, None) != 0:
-            return []
-        needed = wintypes.UINT(0)
-        count = wintypes.UINT(0)
-        reasons = wintypes.DWORD(0)
-        res = rm.RmGetList(session, ctypes.byref(needed), ctypes.byref(count),
-                           None, ctypes.byref(reasons))
-        procs = []
-        if res in (0, ERROR_MORE_DATA) and needed.value > 0:
-            arr = (RM_PROCESS_INFO * needed.value)()
-            count = wintypes.UINT(needed.value)
-            if rm.RmGetList(session, ctypes.byref(needed), ctypes.byref(count),
-                            arr, ctypes.byref(reasons)) == 0:
-                for i in range(count.value):
-                    procs.append((arr[i].Process.dwProcessId, arr[i].strAppName))
-        return procs
-    finally:
-        rm.RmEndSession(session)
-
-
-def _report_lock(pdf_path, err):
-    lockers = _find_locking_processes(pdf_path)
-    if lockers:
-        me = os.getpid()
-        info = ', '.join(f'{name or "?"}(PID {pid}{"=本进程" if pid == me else ""})'
-                         for pid, name in lockers)
-        print(f'标记完成失败，文件仍被占用: {pdf_path.name} -> 占用进程: {info}')
-    else:
-        print(f'标记完成失败(未检测到占用进程，可能为杀软/索引器瞬时锁): {pdf_path.name} | {err}')
-
-
 def _mark_pdf_done(pdf_path):
-    import gc
-    target_done = pdf_path.parent / f'完成_{pdf_path.name}'
-    target_trash = pdf_path.parent.parent / 'TRASH' / pdf_path.name
-    last_err = None
-    for attempt in range(6):
-        gc.collect()
-        time.sleep(0.5 * (attempt + 1))
-        try:
-            pdf_path.rename(target_done)
-            return
-        except Exception:
-            pass
-        try:
-            shutil.move(str(pdf_path), str(target_trash))
-            return
-        except Exception as e:
-            last_err = e
-    _report_lock(pdf_path, last_err)
+    time.sleep(0.5)
+    try:
+        pdf_path.rename(pdf_path.parent / f'完成_{pdf_path.name}')
+    except Exception:
+        shutil.move(str(pdf_path), str(pdf_path.parent.parent / 'TRASH' / pdf_path.name))
 
 _SENTENCE_END = '.。!！?？:：;；)）]】-—'
 
@@ -645,9 +571,10 @@ def _run_local_batch(pdf_files, path_md0, pp, enable_api_refs,
 
 def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
                                enable_api_refs, crossref_cache, enable_cited_by=False,
-                               cited_by_max=10, batch_files=None):
+                               cited_by_max=10, batch_files=None, images_output=None):
     name_to_path = {Path(f).name: Path(f) for f in (batch_files or [])}
-    images_output = path_md0 / 'images'
+    if images_output is None:
+        images_output = path_md0 / 'images'
     images_output.mkdir(exist_ok=True)
     files = _poll_batch_completion(batch_id, token, expected_count=len(batch_files or []))
     if files is None:
@@ -703,7 +630,7 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
 def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
                enable_api_refs: bool = True, enable_cited_by: bool = True,
                cited_by_max: int = 10, token_path: str = None,
-               local: bool = False) -> None:
+               local: bool = False, path_images: str = None) -> None:
     token_path = token_path or r'C:\ResearchFront\DATA\API\MinerU.txt'
     path_pdf = path_pdf or r'C:\Vault\PDF'
     path_zip = path_zip or r'C:\Vault\ZIP'
@@ -715,7 +642,7 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
     for p in (pp, pm):
         p.mkdir(parents=True, exist_ok=True)
 
-    images_dir = pm / 'images'
+    images_dir = Path(path_images) if path_images else pm / 'images'
     images_dir.mkdir(exist_ok=True)
     trash_dir = pp.parent / 'TRASH'
     trash_dir.mkdir(exist_ok=True)
@@ -780,7 +707,9 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
         uploaded_files = []
         for f, u in all_files:
             try:
-                r = requests.put(u, data=open(f, 'rb'), timeout=60)
+                with open(f, 'rb') as fh:
+                    r = requests.put(u, data=fh, timeout=60)
+                # 用 with 确保上传后立即关闭文件句柄，避免占用导致后续标记完成失败
                 if r.status_code == 200:
                     uploaded_files.append(f)
                     continue
@@ -799,5 +728,5 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
     for bid in batch_ids:
         download_and_process_batch(bid, pz, pm, token, pp, enable_api_refs,
                                    crossref_cache, enable_cited_by, cited_by_max,
-                                   batch_file_map.get(bid, []))
+                                   batch_file_map.get(bid, []), images_output=images_dir)
     save_cache(crossref_cache)

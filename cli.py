@@ -2,7 +2,7 @@
 Integrates MinerU API (cloud PDF-to-Markdown), pdfplumber (local PDF-to-MD via --local flag),
 Crossref API (DOI references & citation lookup), PubMed E-utilities (cited-by queries),
 PyMuPDF title extraction (PDF rename), and YAML frontmatter for Obsidian wikilink citation graphs.
-Uses match/case dispatch (Python 3.10+).
+Uses match/case dispatch (Python 3.10+). Includes --path_images for custom image output.
 """
 import argparse
 from pathlib import Path
@@ -21,6 +21,7 @@ from commands.rename_pdf import run_rename_pdf
 def _add_api_args(parser, with_zip=True):
     parser.add_argument('--path_pdf', default=r'C:\Vault\PDF')
     parser.add_argument('--path_md0', default=r'C:\Vault\Claude\MDfrPDF')
+    parser.add_argument('--path_images', default=None)
     if with_zip:
         parser.add_argument('--path_zip', default=r'C:\Vault\ZIP')
     parser.add_argument('--enable_api_references', action='store_true', default=True)
@@ -89,11 +90,11 @@ def main():
         case 'pdf2md':
             run_pdf2md(args.path_pdf, args.path_zip, args.path_md0,
                        args.enable_api_references, args.enable_cited_by, args.cited_by_max,
-                       local=args.local)
+                       local=args.local, path_images=args.path_images)
         case 'pdf2md-local':
             run_pdf2md(args.path_pdf, None, args.path_md0,
                        args.enable_api_references, args.enable_cited_by, args.cited_by_max,
-                       local=True)
+                       local=True, path_images=args.path_images)
         case 'markdown':
             run_markdown_graph(args.path)
         case 'crossref':
