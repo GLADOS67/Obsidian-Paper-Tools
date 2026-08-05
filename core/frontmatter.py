@@ -37,7 +37,6 @@ def parse_frontmatter_file(path: Path) -> Tuple[Optional[Dict], str]:
             continue
     else:
         raw = data.decode('utf-8', errors='replace')
-
     fm, rest = parse_frontmatter_str(raw)
     return (fm if fm else None), rest
 

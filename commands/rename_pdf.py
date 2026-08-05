@@ -135,8 +135,7 @@ def _get_first_page_title(doc):
             candidate = _extract_from_flat_page(same, page_h)
             if candidate:
                 return candidate
-        seen = set()
-        parts = []
+        seen, parts = set(), []
         for s in same:
             key = s['text'].lower()
             if key not in seen:
@@ -166,27 +165,17 @@ def _extract_from_flat_page(spans, page_h):
     if cur:
         blocks.append(cur)
 
-    def _block_is_header(block):
-        combined = ' '.join(t for _, t in block).lower()
-        return any(m in combined for m in STATUS_MARKERS) or DOI_RE.search(combined)
-
-    def _block_is_author(block):
-        return AUTHOR_DEGREE_RE.search(' '.join(t for _, t in block))
-
-    def _block_is_affil(block):
-        combined = ' '.join(t for _, t in block).lower()
-        return any(kw in combined for kw in ['department', 'university', 'school of',
-                                             'hospital', 'institute', 'corresponding author'])
-
+    STATUS_SET = frozenset(STATUS_MARKERS)
     good_blocks = []
     for blk in blocks:
-        if _block_is_header(blk):
+        combined = ' '.join(t for _, t in blk).lower()
+        if any(m in combined for m in STATUS_SET) or DOI_RE.search(combined):
             continue
-        if _block_is_author(blk):
+        if AUTHOR_DEGREE_RE.search(combined):
             continue
-        if _block_is_affil(blk):
+        if any(kw in combined for kw in ('department', 'university', 'school of',
+                                          'hospital', 'institute', 'corresponding author')):
             continue
-        combined = ' '.join(t for _, t in blk)
         if len(combined) < 20:
             continue
         good_blocks.append(blk)

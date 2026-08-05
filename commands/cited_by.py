@@ -16,20 +16,23 @@ from core.refs import split_wikilink
 
 def _wikilink_doi(ref) -> Optional[str]:
     parsed = split_wikilink(ref) if isinstance(ref, str) else None
-    return process_doi(m.group(0))[0] if parsed and (m := PATTERN_DOI.search(parsed[1])) else None
+    return process_doi(m.group(0))[0] if (parsed and (m := PATTERN_DOI.search(parsed[1]))) else None
 
 
 def _get_main_doi_from_md(fm: dict, body: str) -> Optional[str]:
-    if main := extract_doi_from_frontmatter(fm):
+    main = extract_doi_from_frontmatter(fm)
+    if main:
         return main
     refs = fm.get('reference', [])
     if refs and isinstance(refs[0], str):
         first = refs[0]
         inner = first[2:-2] if first.startswith('[[') and first.endswith(']]') else first
         doi_part = inner.split('|', 1)[-1] if '|' in inner else inner
-        if m := PATTERN_DOI.search(doi_part):
+        m = PATTERN_DOI.search(doi_part)
+        if m:
             return process_doi(m.group(0))[0]
-    if m := PATTERN_DOI.search(repair_doi_text(body)):
+    m = PATTERN_DOI.search(repair_doi_text(body))
+    if m:
         return process_doi(m.group(0))[0]
     return doi_from_doi_line(body)
 

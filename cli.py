@@ -1,8 +1,8 @@
 """/s: Obsidian-Paper-Tools — Obsidian Vault academic paper management CLI.
 Integrates MinerU API (cloud PDF-to-Markdown), pdfplumber (local PDF-to-MD via --local flag),
 Crossref API (DOI references & citation lookup), PubMed E-utilities (cited-by queries),
-PyMuPDF title extraction (PDF rename), and YAML frontmatter for Obsidian wikilink citation graphs.
-Uses match/case dispatch (Python 3.10+). Includes --ref_max_age for cited-by freshness.
+PyMuPDF title extraction (PDF rename), image garbage collection (clean_images),
+and YAML frontmatter for Obsidian wikilink citation graphs.
 """
 import argparse
 
@@ -15,12 +15,13 @@ from commands.remove_doi import run_remove_doi
 from commands.archive import run_archive
 from commands.cited_by import run_cited_by, run_cited_by_interactive
 from commands.rename_pdf import run_rename_pdf
+from commands.clean_images import run_clean_images
 
 
 def _add_api_args(parser, with_zip=True):
     parser.add_argument('--path_pdf', default=r'C:\Vault\PDF')
-    parser.add_argument('--path_md0', default=r'C:\Vault\Claude\MDfrPDF')
-    parser.add_argument('--path_images', default=None)
+    parser.add_argument('--path_md0', default=r'C:\Vault\PENDING\Clippings')
+    parser.add_argument('--path_images', default=r'C:\Vault\IMAGE')
     if with_zip:
         parser.add_argument('--path_zip', default=r'C:\Vault\ZIP')
     parser.add_argument('--enable_api_references', action='store_true', default=True)
@@ -80,6 +81,8 @@ def main():
 
     sub.add_parser('rename-pdf', help='Rename PDF files by extracted title').add_argument('directory', nargs='?', default='.', help='Directory containing PDF files')
 
+    sub.add_parser('clean-images', help='清理IMAGE中未被任何MD引用的图片')
+
     args = parser.parse_args()
     if args.command is None:
         parser.print_help()
@@ -112,6 +115,8 @@ def main():
             run_archive(args.source, args.target)
         case 'rename-pdf':
             run_rename_pdf(args.directory)
+        case 'clean-images':
+            run_clean_images()
 
 
 if __name__ == '__main__':

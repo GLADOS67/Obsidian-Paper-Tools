@@ -1,7 +1,4 @@
 """/s: Crossref REST API (api.crossref.org) & PubMed Entrez E-utilities (eutils.ncbi.nlm.nih.gov).
-- fetch_references: GET /works/{doi} → extract references with DOI + text.
-- get_doi_from_citation: GET /works?query= → resolve citation text to DOI.
-- get_cited_by_pubmed: esearch → elink (pubmed_pubmed_citedin) → esummary → citing DOIs.
 All calls cached as JSON (crossref_cache.json) to minimize API traffic.
 """
 import json

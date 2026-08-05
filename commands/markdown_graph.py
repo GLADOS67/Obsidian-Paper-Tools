@@ -19,11 +19,6 @@ def _shared_spec(entry: Optional[DoiEntry]) -> Optional[str]:
     return (entry[0][0] or entry[1][0]) if entry else None
 
 
-def _split_wikilink(ref: str) -> Optional[Tuple[str, str]]:
-    parsed = split_wikilink(ref)
-    return (parsed[0], process_doi(parsed[1])[0]) if parsed else None
-
-
 def _parse_cited_by_entry(cb_item) -> Optional[Tuple[str, str]]:
     if not isinstance(cb_item, str):
         return None
@@ -62,14 +57,15 @@ def _rebuild_reference_list(refs: List, unique_map: Dict[str, DoiEntry],
             ref = item.strip()
             if not ref:
                 continue
-            parsed = _split_wikilink(ref)
+            parsed = split_wikilink(ref)
             if parsed is None:
                 key = ref.lower()
                 if key not in seen:
                     seen.add(key)
                     result.append(ref)
                 continue
-            name_part, display_doi = parsed
+            name_part = parsed[0]
+            display_doi = process_doi(parsed[1])[0]
         else:
             display_doi, name_part = item
         if not is_plausible_doi(display_doi):

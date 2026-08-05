@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.frontmatter import parse_frontmatter_str
+from config import DEFAULT_IMAGE_PATH
 
 
 def _norm(s: str) -> str:
@@ -42,9 +43,15 @@ def _wikilink_page(raw) -> Optional[str]:
 
 def _replace_img(m, *, src_images, dst_images, prefix, counter):
     alt, img = m.group(1), m.group(2)
-    src_img, dst_img = src_images / img, dst_images / img
-    if src_img.exists() and not dst_img.exists():
-        shutil.copy2(src_img, dst_img)
+    dst_img = dst_images / img
+    if not dst_img.exists():
+        for src_dir in (src_images, DEFAULT_IMAGE_PATH):
+            if src_dir is None or src_dir == dst_images:
+                continue
+            src_img = src_dir / img
+            if src_img.exists():
+                shutil.copy2(src_img, dst_img)
+                break
     counter[0] += 1
     return f'{alt}({prefix}{img})'
 
@@ -54,7 +61,7 @@ def _fix_image_paths(md_file: Path, src_images: Path, dst_images: Path) -> int:
         content = md_file.read_text(encoding='utf-8')
     except Exception:
         return 0
-    prefix = Path(os.path.relpath(dst_images, md_file.parent)).as_posix() + '/'
+    prefix = dst_images.resolve().as_posix() + '/'
     counter = [0]
     content = PATTERN_IMG.sub(
         lambda m: _replace_img(m, src_images=src_images, dst_images=dst_images,
@@ -67,13 +74,11 @@ def _fix_image_paths(md_file: Path, src_images: Path, dst_images: Path) -> int:
 
 def _find_parent(path: Path, condition):
     p = path
-    while True:
+    while p != p.parent:
         if condition(p):
             return p
-        parent = p.parent
-        if parent == p:
-            return None
-        p = parent
+        p = p.parent
+    return None if not condition(p) else p
 
 
 def _find_clippings_dir(path: Path) -> Optional[Path]:
@@ -120,11 +125,11 @@ def run_archive(source: str, target: str) -> None:
         rel = dst_dir.relative_to(vault)
     mother = rel.parts[0]
     if mother == 'Clippings':
-        dst_images = vault / 'Clippings' / 'images'
+        dst_images = vault / 'IMAGE'
         dst_claude = vault / 'Claude'
         dst_chi = vault / 'Chi'
     else:
-        dst_images = vault / mother / 'Clippings' / 'images'
+        dst_images = vault / 'IMAGE'
         dst_claude = vault / mother / 'Claude'
         dst_chi = vault / mother / 'Chi'
         if len(rel.parts) == 2 and rel.parts[1] == 'Clippings':

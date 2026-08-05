@@ -1,5 +1,6 @@
 """/s: Command modules for Obsidian-Paper-Tools.
 - pdf2md: MinerU API batch PDF-to-Markdown pipeline + pdfplumber --local fallback + Crossref/PubMed enrichment.
+- clean_images: Scan all .md in vault → detect unreferenced IMAGE/ files → move to TRASH.
 - rename_pdf: PyMuPDF title extraction → auto-rename PDFs by extracted titles.
 - markdown_graph: Obsidian wikilink DOI citation graph builder (reference/cited_by/被引).
 - crossref: Crossref API reference lookup (local file / takeover / local-refs / DOI-import).

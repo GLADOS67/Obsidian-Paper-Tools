@@ -1,7 +1,4 @@
 """/s: DOI (Digital Object Identifier) regex, repair & canonicalization.
-- PATTERN_DOI: matches 10.XXXX/... across plain text, PDF artifacts, and broken whitespace.
-- repair_doi_text: heals PDF-extraction artifacts (line breaks, missing chars, PMID suffixes).
-- process_doi: normalizes → strips trailing punctuation/tail-parens → safe Obsidian filename.
 """
 import re
 from functools import lru_cache
@@ -46,12 +43,11 @@ SMART_QUOTE_TABLE = str.maketrans({
 def repair_doi_text(text: str) -> str:
     text = text.translate(PDF_ARTIFACTS)
     text = PATTERN_DOI_SPLICE.sub('', text)
-    for _ in range(5):
+    prev = None
+    while text != prev:
         prev = text
         text = PATTERN_DOI_REPAIR2.sub(r'\1\2\3', text)
         text = PATTERN_DOI_REPAIR.sub(r'\1\2', text)
-        if prev == text:
-            break
     return text
 
 
@@ -77,9 +73,7 @@ def extract_doi_from_frontmatter(fm: dict) -> str | None:
     doi_val = fm.get('doi')
     if isinstance(doi_val, list) and doi_val:
         doi_val = doi_val[0]
-    if isinstance(doi_val, str) and (m := PATTERN_DOI.search(doi_val)):
-        return process_doi(m.group(0))[0]
-    return None
+    return process_doi(m.group(0))[0] if (isinstance(doi_val, str) and (m := PATTERN_DOI.search(doi_val))) else None
 
 
 def is_plausible_doi(doi: str) -> bool:
@@ -99,10 +93,8 @@ def doi_from_doi_line(content: str) -> Optional[str]:
 
 def make_wikilink(doi: str) -> str:
     doi = doi.strip().rstrip('.,;:')
-    safe = doi.replace('/', '￥')
-    return f'[[{safe}|{doi}]]'
+    return f'[[{doi.replace("/", "￥")}|{doi}]]'
 
 
 def doi_wikilink(doi_raw: str) -> str:
-    display, safe = process_doi(doi_raw)
-    return f'[[{safe}|{display}]]'
+    return make_wikilink(process_doi(doi_raw)[0])

@@ -1,3 +1,5 @@
+"""/s: Wikilink reference utilities for Obsidian citation graphs.
+"""
 from typing import Iterable, List, Optional, Tuple
 
 from core.doi import process_doi
@@ -43,9 +45,9 @@ def process_existing_references(refs: List[str]) -> List[str]:
                 seen.add(ref)
                 processed.append(ref)
             continue
-        name, display = parsed
+        name, display = parsed[0].replace('/', '￥'), parsed[1]
         display_lower = display.lower()
         if display_lower not in seen:
             seen.add(display_lower)
-            processed.append(f'[[{name.replace("/", "￥")}|{display}]]')
+            processed.append(f'[[{name}|{display}]]')
     return processed

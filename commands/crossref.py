@@ -10,9 +10,9 @@ from typing import Dict, List, Optional, Tuple
 import pdfplumber
 
 from core.crossref_api import (fetch_references, get_doi_from_citation,
-                               load_cache, save_cache)
+                                load_cache, save_cache)
 from core.doi import (PATTERN_DOI, doi_from_doi_line, extract_doi_from_frontmatter,
-                      find_plausible_dois, process_doi, repair_doi_text)
+                       find_plausible_dois, process_doi, repair_doi_text)
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.obsidian_path import resolve_input_path, SM_QUICK
 from core.refs import new_doi_wikilinks, process_existing_references, split_wikilink
@@ -65,7 +65,8 @@ def _extract_doi_from_pdf(pdf_path: Path) -> Optional[str]:
         with pdfplumber.open(pdf_path) as pdf:
             for page in pdf.pages:
                 text = (page.extract_text() or '').translate(_DASH_TABLE)
-                if dois := find_plausible_dois(repair_doi_text(text)):
+                dois = find_plausible_dois(repair_doi_text(text))
+                if dois:
                     return dois[0]
     except Exception as e:
         print(f'PDF提取主DOI失败: {e}')
@@ -75,12 +76,16 @@ def _extract_doi_from_pdf(pdf_path: Path) -> Optional[str]:
 def _get_main_doi(pdf_path: Optional[Path], content: Optional[str], fm: Optional[dict]) -> Optional[str]:
     if fm and (main := extract_doi_from_frontmatter(fm)):
         return main
-    if pdf_path and pdf_path.exists() and (doi := _extract_doi_from_pdf(pdf_path)):
-        return process_doi(doi)[0]
+    if pdf_path and pdf_path.exists():
+        doi = _extract_doi_from_pdf(pdf_path)
+        if doi:
+            return process_doi(doi)[0]
     if content:
-        if doi := doi_from_doi_line(content):
+        doi = doi_from_doi_line(content)
+        if doi:
             return doi
-        if dois := find_plausible_dois(content):
+        dois = find_plausible_dois(content)
+        if dois:
             return process_doi(dois[0])[0]
     return None
 
@@ -229,10 +234,10 @@ def _handle_doi_import_mode(main_doi: str) -> None:
             continue
         resolved = resolve_input_path(target)
         if resolved and resolved.exists() and resolved.suffix.lower() == '.md':
-            update_md_references(resolved, refs, main_doi)
-            print(f'已成功将DOI {main_doi} 及其参考文献导入到笔记 {resolved} 的reference属性中。')
-            return
+            break
         print('无效的文件路径，请重新输入有效的Markdown文件路径。')
+    update_md_references(resolved, refs, main_doi)
+    print(f'已成功将DOI {main_doi} 及其参考文献导入到笔记 {resolved} 的reference属性中。')
 
 
 def _handle_takeover_mode(file_path: Path) -> None:

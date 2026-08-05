@@ -1,7 +1,7 @@
 ﻿"""/s: MinerU API + pdfplumber dual-mode PDF-to-Markdown pipeline.
 Accepts --local flag for offline pdfplumber extraction (no MinerU upload); uploads PDFs
 to MinerU (mineru.net) otherwise. Enriches frontmatter with Crossref API references &
-PubMed cited-by data. Supports --path_images and --ref_max_age.
+PubMed cited-by data.
 """
 import json
 import multiprocessing
@@ -27,6 +27,7 @@ from core.doi import (PATTERN_DOI, doi_wikilink, extract_doi_from_frontmatter,
 from core.frontmatter import cited_by_fresh, dump_frontmatter, parse_frontmatter_str
 from core.markdown_utils import clean_markdown_body
 from core.refs import build_existing_dois, new_doi_wikilinks, process_existing_references
+from config import DEFAULT_IMAGE_PATH
 
 
 URL_PATTERN = re.compile(
@@ -56,17 +57,16 @@ def read_json_file(path: Path, encoding='utf-8'):
 
 
 def extract_text(obj):
-    stack = [obj]
-    while stack:
-        item = stack.pop()
-        if isinstance(item, dict):
-            if isinstance(item.get('content'), str):
-                yield item['content']
-            stack.extend(item.values())
-        elif isinstance(item, list):
-            stack.extend(item)
-        elif isinstance(item, str):
-            yield item
+    if isinstance(obj, dict):
+        if isinstance(obj.get('content'), str):
+            yield obj['content']
+        for v in obj.values():
+            yield from extract_text(v)
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from extract_text(item)
+    elif isinstance(obj, str):
+        yield obj
 
 
 def _build_clippings_all_doi_set(md_dir):
@@ -317,9 +317,7 @@ def _download_zip(zip_url, zip_path, file_name, idx):
     try:
         r = requests.get(zip_url, stream=True, timeout=120)
         r.raise_for_status()
-        with open(zip_path, 'wb') as f:
-            for chunk in r.iter_content(8192):
-                f.write(chunk)
+        zip_path.write_bytes(r.content)
         return idx, True
     except Exception as e:
         print(f'[{idx}] 下载失败: {e}')
@@ -352,7 +350,7 @@ def _poll_batch_completion(batch_id, token, max_wait=1800, expected_count=None):
         states = [f['state'] for f in files]
         done_count = states.count('done')
         terminal_count = sum(1 for s in states if s in TERMINAL)
-        target = expected_count if expected_count else len(files)
+        target = expected_count if expected_count is not None else len(files)
         print(f'目前状态: {states} | 完成数: {done_count}/{len(files)} | 目标: {target}')
         if terminal_count >= target:
             return [f for f in files if f['state'] == 'done']
@@ -414,8 +412,7 @@ def _table_to_md(table):
 
 def _merge_paragraphs(text):
     lines = text.split('\n')
-    result = []
-    i = 0
+    result, i = [], 0
     while i < len(lines):
         line = lines[i].rstrip()
         if not line:
@@ -428,7 +425,7 @@ def _merge_paragraphs(text):
             or line.endswith('-')
         ):
             nxt = lines[i + 1].strip()
-            line = line[:-1] + nxt if line.endswith('-') else line + ' ' + nxt
+            line = line[:-1] + nxt if line.endswith('-') else f'{line} {nxt}'
             i += 1
         result.append(line)
         i += 1
@@ -518,7 +515,7 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
                                ref_max_age=15):
     name_to_path = {Path(f).name: Path(f) for f in (batch_files or [])}
     if images_output is None:
-        images_output = path_md0 / 'images'
+        images_output = DEFAULT_IMAGE_PATH
     images_output.mkdir(exist_ok=True)
     files = _poll_batch_completion(batch_id, token, expected_count=len(batch_files or []))
     if files is None:
@@ -579,7 +576,7 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
     token_path = token_path or r'C:\ResearchFront\DATA\API\MinerU.txt'
     path_pdf = path_pdf or r'C:\Vault\PDF'
     path_zip = path_zip or r'C:\Vault\ZIP'
-    path_md0 = path_md0 or r'C:\Vault\Claude\MDfrPDF'
+    path_md0 = path_md0 or r'C:\Vault\PENDING\Clippings'
 
     crossref_cache = load_cache()
     pp = Path(path_pdf)
@@ -587,7 +584,7 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
     for p in (pp, pm):
         p.mkdir(parents=True, exist_ok=True)
 
-    images_dir = Path(path_images) if path_images else pm / 'images'
+    images_dir = Path(path_images) if path_images else DEFAULT_IMAGE_PATH
     images_dir.mkdir(exist_ok=True)
     trash_dir = pp.parent / 'TRASH'
     trash_dir.mkdir(exist_ok=True)

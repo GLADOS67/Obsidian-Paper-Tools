@@ -135,7 +135,6 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
             clip_src = (fm.get('source') or '').strip().lower().rstrip('/')
             clip_refs = fm.get('reference', [])
             clip_fr = _first_ref_target(clip_refs)
-            clip_dois = None
             chi_path = None; method = ''; score = 0.0
             if clip_src and clip_src in by_source:
                 chi_path, method, score = by_source[clip_src], 'source', 1.0
@@ -158,24 +157,28 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
                 fm['paper-translate'] = f'[[{chi_path.stem}|{display}]]'
                 pt_matched += 1; pt_methods[method] += 1; any_changed = True
                 print(f'[PT] {method:10s} (conf={score:.2f})  {clip_md.name} -> {chi_path.name}')
-            elif existing_pt:
-                pt_skipped += 1
-            else:
+            elif not existing_pt:
                 pt_failed += 1
                 if verbose:
+                    if clip_dois is None:
+                        clip_dois = _extract_doi_set(fm.get('reference', []))
                     print(f'[PT] FAIL: {clip_md.name}')
                     for cand_p, cand_s in sorted(((p, _jaccard(clip_dois, d)) for p, d in chi_doi_sets.items()), key=lambda x: x[1], reverse=True)[:3]:
                         print(f'  jaccard={cand_s:.3f}  {cand_p.name}')
+            else:
+                pt_skipped += 1
 
         pa_result, _ = _match_prop(fm, 'paper-analyze', 'PA', pa_index, underscore_stem, clip_md.name, force)
-        if pa_result == 'matched': pa_matched += 1; any_changed = True
-        elif pa_result == 'skipped': pa_skipped += 1
-        else: pa_failed += 1
+        pa_matched += pa_result == 'matched'
+        pa_skipped += pa_result == 'skipped'
+        pa_failed += pa_result == 'failed'
+        any_changed |= pa_result == 'matched'
 
         fe_result, _ = _match_prop(fm, 'figure-extractor', 'FE', fe_index, underscore_stem, clip_md.name, force)
-        if fe_result == 'matched': fe_matched += 1; any_changed = True
-        elif fe_result == 'skipped': fe_skipped += 1
-        else: fe_failed += 1
+        fe_matched += fe_result == 'matched'
+        fe_skipped += fe_result == 'skipped'
+        fe_failed += fe_result == 'failed'
+        any_changed |= fe_result == 'matched'
 
         if any_changed and not dry_run:
             clip_md.write_text(dump_frontmatter(fm, body), encoding='utf-8')
