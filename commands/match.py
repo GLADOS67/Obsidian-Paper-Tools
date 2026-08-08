@@ -1,5 +1,4 @@
-"""/s: Fuzzy matcher linking Clippings notes to PA (paper-analyze) / PT (paper-translate) / FE (figure-extractor).
-3 strategies: source field exact → first_ref DOI exact → Jaccard similarity on DOI sets.
+"""/s: Fuzzy matcher (source→first_ref→Jaccard) linking Clippings to PA/PT/FE.
 """
 import re
 from pathlib import Path
@@ -16,17 +15,15 @@ JACCARD_THRESHOLD = 0.85
 def _extract_doi_set(ref_list: list) -> set:
     if not ref_list:
         return set()
-    dois = set()
+    result = set()
     for ref in ref_list:
         if not isinstance(ref, str):
             continue
-        ref_clean = ref.replace('\n', ' ')
-        m = WIKILINK_RE.search(ref_clean)
-        if m:
-            dois.update(DOI_RE.findall(m.group(2)))
-        else:
-            dois.update(DOI_RE.findall(ref_clean))
-    return dois
+        text = ref.replace('\n', ' ')
+        match = WIKILINK_RE.search(text)
+        source = match.group(2) if match else text
+        result.update(doi for doi in DOI_RE.findall(source))
+    return result
 
 
 def _first_ref_target(ref_list: list) -> Optional[str]:
@@ -55,10 +52,10 @@ def _link_target(value) -> Optional[str]:
 def _match_prop(fm, prop, display, index_map, stem, clip_name, force):
     existing = fm.get(prop)
     path = index_map.get(stem)
-    if existing and (not force or not path or _link_target(existing) == path.stem):
-        return 'skipped', None
     if not path:
-        return 'failed', None
+        return ('skipped', None) if existing else ('failed', None)
+    if existing and (not force or _link_target(existing) == path.stem):
+        return 'skipped', None
     fm[prop] = f'[[{path.stem}]]'
     print(f'[{display}] filename       {clip_name} -> {path.name}')
     return 'matched', path
@@ -114,28 +111,31 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
                 pa_index[stem] = md
         print(f'Claude: {len(pa_index)} PA, {len(fe_index)} FE\n')
 
-    pt_matched = pt_skipped = pt_failed = 0
-    pt_methods = {'source': 0, 'first_ref': 0, 'jaccard': 0}
-    pa_matched = pa_skipped = pa_failed = 0
-    fe_matched = fe_skipped = fe_failed = 0
+    stats = {
+        'pt': {'matched': 0, 'skipped': 0, 'failed': 0, 'methods': {'source': 0, 'first_ref': 0, 'jaccard': 0}},
+        'pa': {'matched': 0, 'skipped': 0, 'failed': 0},
+        'fe': {'matched': 0, 'skipped': 0, 'failed': 0},
+    }
 
     for clip_md in sorted(clip_dir.rglob('*.md')):
         fm, body = parse_frontmatter_file(clip_md)
         if not fm:
             print(f'SKIP (no fm): {clip_md.name}')
-            pt_skipped += 1; pa_skipped += 1; fe_skipped += 1
+            for k in ('pt', 'pa', 'fe'):
+                stats[k]['skipped'] += 1
             continue
         underscore_stem = clip_md.stem.replace(' ', '_')
         any_changed = False
 
         existing_pt = fm.get('paper-translate')
         if existing_pt and not force:
-            pt_skipped += 1
+            stats['pt']['skipped'] += 1
         else:
             clip_src = (fm.get('source') or '').strip().lower().rstrip('/')
             clip_refs = fm.get('reference', [])
             clip_fr = _first_ref_target(clip_refs)
             chi_path = None; method = ''; score = 0.0
+            clip_dois = set()
             if clip_src and clip_src in by_source:
                 chi_path, method, score = by_source[clip_src], 'source', 1.0
             elif clip_fr and clip_fr in by_first_ref:
@@ -151,40 +151,38 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
                 else:
                     chi_path = None
             if chi_path and existing_pt and _link_target(existing_pt) == chi_path.stem:
-                pt_skipped += 1
+                stats['pt']['skipped'] += 1
             elif chi_path:
                 display = chi_display.get(chi_path) or chi_path.stem
                 fm['paper-translate'] = f'[[{chi_path.stem}|{display}]]'
-                pt_matched += 1; pt_methods[method] += 1; any_changed = True
+                stats['pt']['matched'] += 1; stats['pt']['methods'][method] += 1; any_changed = True
                 print(f'[PT] {method:10s} (conf={score:.2f})  {clip_md.name} -> {chi_path.name}')
             elif not existing_pt:
-                pt_failed += 1
+                stats['pt']['failed'] += 1
                 if verbose:
-                    if clip_dois is None:
-                        clip_dois = _extract_doi_set(fm.get('reference', []))
                     print(f'[PT] FAIL: {clip_md.name}')
                     for cand_p, cand_s in sorted(((p, _jaccard(clip_dois, d)) for p, d in chi_doi_sets.items()), key=lambda x: x[1], reverse=True)[:3]:
                         print(f'  jaccard={cand_s:.3f}  {cand_p.name}')
             else:
-                pt_skipped += 1
+                stats['pt']['skipped'] += 1
 
         pa_result, _ = _match_prop(fm, 'paper-analyze', 'PA', pa_index, underscore_stem, clip_md.name, force)
-        pa_matched += pa_result == 'matched'
-        pa_skipped += pa_result == 'skipped'
-        pa_failed += pa_result == 'failed'
+        stats['pa']['matched'] += pa_result == 'matched'
+        stats['pa']['skipped'] += pa_result == 'skipped'
+        stats['pa']['failed'] += pa_result == 'failed'
         any_changed |= pa_result == 'matched'
 
         fe_result, _ = _match_prop(fm, 'figure-extractor', 'FE', fe_index, underscore_stem, clip_md.name, force)
-        fe_matched += fe_result == 'matched'
-        fe_skipped += fe_result == 'skipped'
-        fe_failed += fe_result == 'failed'
+        stats['fe']['matched'] += fe_result == 'matched'
+        stats['fe']['skipped'] += fe_result == 'skipped'
+        stats['fe']['failed'] += fe_result == 'failed'
         any_changed |= fe_result == 'matched'
 
         if any_changed and not dry_run:
             clip_md.write_text(dump_frontmatter(fm, body), encoding='utf-8')
 
     print(f'\n=== Results ===')
-    print(f'[PT] Matched: {pt_matched}  Skipped: {pt_skipped}  Failed: {pt_failed}  Methods: source={pt_methods["source"]} first_ref={pt_methods["first_ref"]} jaccard={pt_methods["jaccard"]}')
-    print(f'[PA] Matched: {pa_matched}  Skipped: {pa_skipped}  Failed: {pa_failed}')
-    print(f'[FE] Matched: {fe_matched}  Skipped: {fe_skipped}  Failed: {fe_failed}')
-    return pt_matched + pa_matched + fe_matched > 0
+    print(f'[PT] Matched: {stats["pt"]["matched"]}  Skipped: {stats["pt"]["skipped"]}  Failed: {stats["pt"]["failed"]}  Methods: source={stats["pt"]["methods"]["source"]} first_ref={stats["pt"]["methods"]["first_ref"]} jaccard={stats["pt"]["methods"]["jaccard"]}')
+    print(f'[PA] Matched: {stats["pa"]["matched"]}  Skipped: {stats["pa"]["skipped"]}  Failed: {stats["pa"]["failed"]}')
+    print(f'[FE] Matched: {stats["fe"]["matched"]}  Skipped: {stats["fe"]["skipped"]}  Failed: {stats["fe"]["failed"]}')
+    return stats['pt']['matched'] + stats['pa']['matched'] + stats['fe']['matched'] > 0

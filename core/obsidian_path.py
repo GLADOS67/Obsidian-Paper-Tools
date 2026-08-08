@@ -1,4 +1,4 @@
-"""/s: Obsidian URI (obsidian://open?vault=...&file=...) resolver with fuzzy glob fallback.
+"""/s: Obsidian URI resolver with fuzzy glob fallback.
 """
 import re
 import urllib.parse
@@ -42,8 +42,9 @@ def _fuzzy_search(dir_path: Path, stem_raw: str) -> Optional[Path]:
     try:
         candidates = [
             p for p in dir_path.glob(f'{safe_stem}*.md')
-            if (sm := SequenceMatcher(None, stem_lower, p.stem.lower())).quick_ratio() >= SM_QUICK
-            and sm.ratio() >= SM_QUICK
+            if p.stem.lower() == stem_lower
+            or ((sm := SequenceMatcher(None, stem_lower, p.stem.lower())).quick_ratio() >= SM_QUICK
+                and sm.ratio() >= SM_QUICK)
         ]
         if candidates:
             candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
@@ -77,13 +78,8 @@ def resolve_input_path(input_str: str, fallback_search: bool = False) -> Optiona
     full_path = OBSIDIAN_ROOT / vault / file_clean
     if full_path.exists():
         return full_path
-    md_candidate = _try_suffix(full_path, '.md')
-    if md_candidate:
-        return md_candidate
-    stripped_candidate = _try_strip_dot(full_path)
-    if stripped_candidate:
-        return stripped_candidate
+    for candidate in (_try_suffix(full_path, '.md'), _try_strip_dot(full_path)):
+        if candidate:
+            return candidate
     fuzzy = _fuzzy_search(full_path.parent, full_path.stem.strip('. \t').rstrip('.'))
-    if fuzzy:
-        return fuzzy
-    return _fallback_search(file_clean) if fallback_search else None
+    return fuzzy or (_fallback_search(file_clean) if fallback_search else None)

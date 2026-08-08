@@ -1,4 +1,4 @@
-"""/s: Obsidian markdown body cleaner — fixes image links, strips artifact tags.
+"""/s: Obsidian markdown body cleaner (image fixup, artifact removal).
 """
 import re
 from core.doi import PATTERN_DOI
@@ -20,8 +20,7 @@ ARTIFACT_TAGS = re.compile(r'</?(?:lcel|nl)>', re.IGNORECASE)
 def _fix_img(m: re.Match) -> str:
     alt, link = m.group(1), m.group(2).strip()
     link = f'https://{link[2:]}' if link.startswith('//') else link
-    is_local = link.startswith(('images/', 'https://', 'C:/'))
-    return f'![{alt}]({link})' if is_local else f'!({link})'
+    return f'![{alt}]({link})' if link.startswith(('images/', 'https://', 'C:/')) else f'!({link})'
 
 
 def _fix_combined_link(m: re.Match) -> str:
@@ -31,8 +30,7 @@ def _fix_combined_link(m: re.Match) -> str:
     doi_in_text = PATTERN_DOI.search(text)
     if doi_in_text:
         return f' {text} '
-    url = m.group('url')
-    doi_in_url = PATTERN_DOI.search(url)
+    doi_in_url = PATTERN_DOI.search(m.group('url'))
     return f' {doi_in_url.group(0)} ' if doi_in_url else m.group(0)
 
 

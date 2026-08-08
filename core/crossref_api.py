@@ -1,5 +1,4 @@
-"""/s: Crossref REST API (api.crossref.org) & PubMed Entrez E-utilities (eutils.ncbi.nlm.nih.gov).
-All calls cached as JSON (crossref_cache.json) to minimize API traffic.
+"""/s: Crossref REST API & PubMed Entrez E-utilities wrappers with JSON caching.
 """
 import json
 import random
@@ -46,14 +45,11 @@ def _api_get(url: str, params: dict = None, timeout: int = 10) -> Optional[dict]
 
 
 def get_doi_from_citation(citation_text: str, cache: dict = None) -> Optional[Tuple[str, str]]:
-    cache = {} if cache is None else cache
+    cache = cache or {}
     key = f'cite:{citation_text.strip()}'
     if key in cache:
         val = cache[key]
-        if val is None:
-            return None
-        if isinstance(val, (tuple, list)) and len(val) == 2:
-            return (val[0], val[1])
+        return (val[0], val[1]) if isinstance(val, (tuple, list)) and len(val) == 2 else None
     data = _api_get(CROSSREF_API_BASE, params={
         'rows': 1, 'mailto': 'lik1453529@wmu.edu.cn', 'query': citation_text,
     })
@@ -83,8 +79,7 @@ def _extract_issued_year(msg: dict) -> Optional[int]:
 
 
 def get_issued_year(doi: str, cache: dict = None) -> Optional[int]:
-    # 查询论文首发年份, 优先命中缓存(issued:{doi}), 查不到时缓存None避免重复请求
-    cache = {} if cache is None else cache
+    cache = cache or {}
     key = f'issued:{doi}'
     if key in cache:
         return cache[key]
@@ -95,7 +90,7 @@ def get_issued_year(doi: str, cache: dict = None) -> Optional[int]:
 
 
 def fetch_references(doi: str, cache: dict = None) -> List[Dict]:
-    cache = {} if cache is None else cache
+    cache = cache or {}
     refs_key, citedby_key = doi, f'citedby:{doi}'
     cached_refs = cache.get(refs_key)
     if cached_refs is not None and citedby_key in cache:
@@ -107,7 +102,6 @@ def fetch_references(doi: str, cache: dict = None) -> List[Dict]:
         return []
     msg = data.get('message', {})
     cache[citedby_key] = msg.get('is-referenced-by-count', 0)
-    # 复用本次请求顺带缓存首发年份, 供get_issued_year免二次请求
     cache[f'issued:{doi}'] = _extract_issued_year(msg)
     refs = []
     for ref in msg.get('reference', []):
@@ -132,18 +126,20 @@ def fetch_references(doi: str, cache: dict = None) -> List[Dict]:
 
 def get_cited_by_pubmed(doi: str, cache: dict = None,
                         existing_dois: set = None, max_rows: int = 10) -> Tuple[int, List[str]]:
-    cache = {} if cache is None else cache
-    existing_dois = set() if existing_dois is None else existing_dois
+    cache = cache or {}
+    existing_dois = existing_dois or set()
     count_key, list_key = f'pm_citedby:{doi}', f'pm_citedby_list:{doi}'
+
+    if count_key in cache and list_key in cache:
+        total, all_dois = cache[count_key], cache[list_key]
+        new_dois = [d for d in all_dois if d.lower() not in existing_dois]
+        return total, new_dois[:max_rows]
 
     def _finalize(total: int, all_dois: List[str]) -> Tuple[int, List[str]]:
         cache[count_key] = total
         cache[list_key] = all_dois
         new_dois = [d for d in all_dois if d.lower() not in existing_dois]
         return total, new_dois[:max_rows]
-
-    if count_key in cache and list_key in cache:
-        return _finalize(cache[count_key], cache[list_key])
 
     base = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
     try:

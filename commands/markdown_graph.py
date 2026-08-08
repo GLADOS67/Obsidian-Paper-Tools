@@ -1,6 +1,4 @@
-"""/s: Obsidian wikilink DOI citation graph builder.
-Scans all .md in a directory, builds global DOI→title mapping from reference/cited_by
-wikilinks, resolves names, populates 被引/正向/负向 frontmatter fields.
+"""/s: Obsidian wikilink DOI citation graph builder (reference/cited_by/被引).
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -10,7 +8,7 @@ from core.doi import (PATTERN_DOI, PATTERN_SAFE_DOI, find_plausible_dois,
                        repair_doi_text)
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.markdown_utils import clean_markdown_body
-from core.refs import split_wikilink
+from core.refs import split_wikilink, wikilink_doi
 
 DoiEntry = List  # [[ref_spec, ref_stems_dict], [cb_spec, cb_stems_dict]]
 
@@ -23,16 +21,14 @@ def _parse_cited_by_entry(cb_item) -> Optional[Tuple[str, str]]:
     if not isinstance(cb_item, str):
         return None
     parsed = split_wikilink(cb_item.strip())
-    name_part, doi_part = parsed if parsed else ('', cb_item.strip())
-    m = PATTERN_DOI.search(doi_part)
-    if m and is_plausible_doi(m.group(0)):
-        return (name_part, process_doi(m.group(0))[0])
-    return None
+    name_part = parsed[0] if parsed else ''
+    doi = wikilink_doi(cb_item)
+    return (name_part, doi) if doi else None
 
 
 def _update_doi_map(display_doi: str, name_part: str,
                     unique_map: Dict[str, DoiEntry],
-                    citing_stem: str, slot: int = 0) -> Tuple[str, bool]:
+                    citing_stem: str, slot: int = 0):
     is_special = not PATTERN_SAFE_DOI.match(name_part)
     key = display_doi.lower()
     entry = unique_map.get(key)
@@ -41,7 +37,6 @@ def _update_doi_map(display_doi: str, name_part: str,
     if not entry[slot][0]:
         entry[slot][0] = name_part if is_special else None
     entry[slot][1][citing_stem] = None
-    return (entry[0][0] or entry[1][0] or process_doi(display_doi)[1]), is_special
 
 
 def _rebuild_reference_list(refs: List, unique_map: Dict[str, DoiEntry],
@@ -64,8 +59,7 @@ def _rebuild_reference_list(refs: List, unique_map: Dict[str, DoiEntry],
                     seen.add(key)
                     result.append(ref)
                 continue
-            name_part = parsed[0]
-            display_doi = process_doi(parsed[1])[0]
+            display_doi, name_part = process_doi(parsed[1])[0], parsed[0]
         else:
             display_doi, name_part = item
         if not is_plausible_doi(display_doi):
@@ -74,13 +68,16 @@ def _rebuild_reference_list(refs: List, unique_map: Dict[str, DoiEntry],
         if dedup_key in seen:
             continue
         seen.add(dedup_key)
-        if citing_stem is None:
+        if citing_stem is not None:
+            _update_doi_map(display_doi, name_part, unique_map, citing_stem)
+            entry = unique_map[dedup_key]
+            used_name = entry[0][0] or entry[1][0] or process_doi(display_doi)[1]
+            is_special = not PATTERN_SAFE_DOI.match(name_part)
+            special_count += is_special
+        else:
             spec = _shared_spec(unique_map.get(dedup_key))
             used_name = spec or (process_doi(display_doi)[1]
                                  if PATTERN_SAFE_DOI.match(name_part) else name_part)
-        else:
-            used_name, is_special = _update_doi_map(display_doi, name_part, unique_map, citing_stem)
-            special_count += is_special
         result.append(f'[[{used_name}|{display_doi}]]')
     return result, special_count
 
@@ -88,20 +85,15 @@ def _rebuild_reference_list(refs: List, unique_map: Dict[str, DoiEntry],
 def _resolve_cited_by(cited: List, unique_map: Dict[str, DoiEntry]) -> List[str]:
     if not cited:
         return []
-    seen = set()
-    result = []
+    parsed_items = []
     for item in cited:
         parsed = _parse_cited_by_entry(item)
-        if parsed is None:
+        if not parsed:
             continue
-        _, display_doi = parsed
-        dedup_key = display_doi.lower()
-        if dedup_key in seen:
-            continue
-        seen.add(dedup_key)
-        used_name = _shared_spec(unique_map.get(dedup_key)) or process_doi(display_doi)[1]
-        result.append(f'[[{used_name}|{display_doi}]]')
-    return result
+        name_part, display_doi = parsed
+        parsed_items.append((display_doi, process_doi(display_doi)[1]))
+    refs, _ = _rebuild_reference_list(parsed_items, unique_map, is_existing=False)
+    return refs
 
 
 def _resolve_self_doi(file_stem: str, refs: List[str]) -> Optional[str]:
@@ -116,7 +108,7 @@ def _resolve_self_doi(file_stem: str, refs: List[str]) -> Optional[str]:
                     return process_doi(m.group(0))[0]
     first = refs[0]
     inner = first[2:-2] if (first.startswith('[[') and first.endswith(']]')) else first
-    doi_part = inner.split('|', 1)[-1] if '|' in inner else inner
+    doi_part = inner.partition('|')[2] or inner
     m = PATTERN_DOI.search(doi_part)
     return process_doi(m.group(0))[0] if m else None
 
@@ -190,7 +182,7 @@ def run_markdown_graph(directory: str) -> None:
             fm['cited_by'] = _resolve_cited_by(fm['cited_by'], unique_map)
         self_doi = _resolve_self_doi(file.stem, refs)
         key = self_doi.lower() if self_doi else None
-        citing_stems = unique_map[key][0][1] if (key and key in unique_map) else []
+        citing_stems = list(unique_map[key][0][1]) if (key and key in unique_map) else []
         citing_stems = [s for s in citing_stems if s != file.stem]
         fm['被引'] = [f'[[{s}]]' for s in citing_stems]
         fm['tags'] = ['正向' if (len(citing_stems) - fm.get('特殊引用数', 0)) > 0 else '负向']

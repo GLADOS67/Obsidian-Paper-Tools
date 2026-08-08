@@ -1,7 +1,4 @@
-﻿"""/s: MinerU API + pdfplumber dual-mode PDF-to-Markdown pipeline.
-Accepts --local flag for offline pdfplumber extraction (no MinerU upload); uploads PDFs
-to MinerU (mineru.net) otherwise. Enriches frontmatter with Crossref API references &
-PubMed cited-by data.
+﻿"""/s: MinerU API + pdfplumber dual-mode PDF-to-Markdown with Crossref/PubMed enrichment.
 """
 import json
 import multiprocessing
@@ -22,8 +19,9 @@ import requests
 from core.crossref_api import (fetch_references, get_doi_from_citation,
                                get_cited_by_pubmed, get_issued_year,
                                load_cache, save_cache)
-from core.doi import (PATTERN_DOI, doi_wikilink, extract_doi_from_frontmatter,
-                       find_plausible_dois, normalize_unicode_dashes, process_doi, repair_doi_text)
+from core.doi import (PATTERN_DOI, extract_doi_from_frontmatter,
+                       find_plausible_dois, get_main_doi, make_wikilink,
+                       normalize_unicode_dashes, process_doi, repair_doi_text)
 from core.frontmatter import cited_by_fresh, dump_frontmatter, parse_frontmatter_str
 from core.markdown_utils import clean_markdown_body
 from core.refs import build_existing_dois, new_doi_wikilinks, process_existing_references
@@ -34,26 +32,6 @@ URL_PATTERN = re.compile(
     r'https?://[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)',
     re.IGNORECASE
 )
-
-
-def read_text_file(path: Path, encoding='utf-8'):
-    try:
-        with open(path, 'r', encoding=encoding) as f:
-            return f.read()
-    except Exception as e:
-        print(f'读取文件失败 {path}: {e}')
-        return None
-
-
-def read_json_file(path: Path, encoding='utf-8'):
-    content = read_text_file(path, encoding)
-    if content is None:
-        return None
-    try:
-        return json.loads(content)
-    except Exception as e:
-        print(f'解析JSON失败 {path}: {e}')
-        return None
 
 
 def extract_text(obj):
@@ -102,19 +80,6 @@ def apply_upload_urls(token, files_info, url):
             'upload_urls': result['data']['file_urls']}
 
 
-def _get_main_doi(content, fm, all_dois=None):
-    if main := extract_doi_from_frontmatter(fm):
-        return main
-    doi_line = next((l for l in content.splitlines() if l.strip().lower().startswith('doi:')), None)
-    if doi_line and (m := PATTERN_DOI.search(doi_line)):
-        return process_doi(m.group(0))[0]
-    if all_dois:
-        return process_doi(next(iter(all_dois)))[0]
-    if dois := find_plausible_dois(content):
-        return process_doi(dois[0])[0]
-    return None
-
-
 def _append_crossref_refs(fm, rest, main_doi, crossref_cache, md_name):
     if not main_doi:
         return main_doi, None
@@ -140,15 +105,13 @@ def _append_crossref_refs(fm, rest, main_doi, crossref_cache, md_name):
     return main_doi, '\n\n## 参考文献\n' + '\n'.join(lines) if lines else None
 
 
-def _extract_dois_from_md(content):
-    return set(find_plausible_dois(repair_doi_text(content)))
-
-
 def _extract_json_data(json_src):
     if not (json_src and json_src.exists()):
         return set(), []
-    content_data = read_json_file(json_src)
-    if content_data is None:
+    try:
+        content_data = json.loads(json_src.read_text(encoding='utf-8'))
+    except Exception as e:
+        print(f'读取/解析JSON失败 {json_src}: {e}')
         return set(), []
     dois = set()
     urls = []
@@ -176,14 +139,10 @@ def _replace_urls(content, urls):
     )
 
 
-def _pdf_worker(path):
-    with pdfplumber.open(path) as pdf:
-        return '\n'.join(normalize_unicode_dashes(page.extract_text() or '')
-                         for page in pdf.pages)
-
-
 def _pdf_extract_task(queue, pdf_path):
-    queue.put(_pdf_worker(pdf_path))
+    with pdfplumber.open(pdf_path) as pdf:
+        queue.put('\n'.join(normalize_unicode_dashes(page.extract_text() or '')
+                            for page in pdf.pages))
 
 
 def _extract_pdf_dois(pdf_path):
@@ -217,7 +176,7 @@ def _update_cited_by(fm, main_doi, crossref_cache, cited_by_max, clippings_doi_s
     fm.pop('cited_by_count', None)
     fm['cited_by_date'] = datetime.now().strftime('%Y-%m-%d')
     if citing_dois:
-        fm['cited_by'] = [doi_wikilink(d) for d in citing_dois]
+        fm['cited_by'] = [make_wikilink(process_doi(d)[0]) for d in citing_dois]
 
 
 def _merge_new_dois(fm, all_dois, md_name):
@@ -243,23 +202,27 @@ def _pin_main_doi(fm, main_doi, md_stem):
 def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_cache,
                         enable_cited_by=False, cited_by_max=10, images_dir=None,
                         clippings_doi_set=None, ref_max_age=15):
-    content = normalize_unicode_dashes(read_text_file(md_dst)) if md_dst.exists() else None
-    if content is None:
+    if not md_dst.exists():
+        return False
+    try:
+        content = normalize_unicode_dashes(md_dst.read_text(encoding='utf-8'))
+    except Exception as e:
+        print(f'读取MD文件失败 {md_dst}: {e}')
         return False
 
     with ThreadPoolExecutor(max_workers=3) as ex:
-        f_md = ex.submit(_extract_dois_from_md, content)
+        f_md = ex.submit(lambda c: set(find_plausible_dois(repair_doi_text(c))), content)
         f_json = ex.submit(_extract_json_data, json_src)
         f_pdf = ex.submit(_extract_pdf_dois, pdf_path)
-        dois_md = (f_md.result() or set())
-        json_dois, urls = (f_json.result() or (set(), []))
-        dois_pdf = (f_pdf.result() or set())
+        dois_md = f_md.result() or set()
+        json_dois, urls = f_json.result() or (set(), [])
+        dois_pdf = f_pdf.result() or set()
 
     all_dois = dois_md | json_dois | dois_pdf
     content = _replace_urls(content, urls)
 
     fm, rest = parse_frontmatter_str(content)
-    main_doi = _get_main_doi(content, fm, all_dois)
+    main_doi = get_main_doi(fm, content, all_dois)
     if main_doi is None and enable_api_refs and not all_dois:
         title = fm.get('title', md_dst.stem)
         result = get_doi_from_citation(title, crossref_cache)
@@ -419,12 +382,12 @@ def _merge_paragraphs(text):
             result.append('')
             i += 1
             continue
-        while i + 1 < len(lines) and lines[i + 1].strip() and (
-            line[-1] not in _SENTENCE_END
-            or lines[i + 1].strip()[0].islower()
-            or line.endswith('-')
-        ):
+        while i + 1 < len(lines):
             nxt = lines[i + 1].strip()
+            if not nxt or (line[-1] in _SENTENCE_END
+                           and not line.endswith('-')
+                           and not nxt[0].islower()):
+                break
             line = line[:-1] + nxt if line.endswith('-') else f'{line} {nxt}'
             i += 1
         result.append(line)
@@ -432,20 +395,15 @@ def _merge_paragraphs(text):
     return '\n'.join(result)
 
 
-def _detect_heading(s):
-    if _RE_NUMBERED_HEADING.match(s):
-        return True
-    if len(s) < 80 and s.isupper() and sum(c.isalpha() for c in s) > 3:
-        return True
-    return bool(_RE_SECTION_HEADING.match(s))
-
-
 def _post_process_markdown(text):
-    lines = text.split('\n')
     result = []
-    for line in lines:
+    for line in text.split('\n'):
         stripped = line.strip()
-        if _detect_heading(stripped) and not stripped.startswith('#'):
+        if not stripped.startswith('#') and (
+            _RE_NUMBERED_HEADING.match(stripped)
+            or (len(stripped) < 80 and stripped.isupper() and sum(c.isalpha() for c in stripped) > 3)
+            or _RE_SECTION_HEADING.match(stripped)
+        ):
             result.append(f'## {stripped}')
         else:
             result.append(line)
@@ -617,11 +575,11 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
         print(f'\n全部完成！共处理 {len(pdf_files)} 个PDF，输出到 {pm}')
         return
 
-    token_content = read_text_file(Path(token_path))
-    if not token_content:
-        print('无法读取API Token')
+    try:
+        token = Path(token_path).read_text(encoding='utf-8').strip()
+    except Exception as e:
+        print(f'无法读取API Token: {e}')
         return
-    token = token_content.strip()
 
     pz = Path(path_zip)
     pz.mkdir(parents=True, exist_ok=True)

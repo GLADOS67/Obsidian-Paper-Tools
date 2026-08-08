@@ -1,8 +1,6 @@
 """/s: Obsidian-Paper-Tools — Obsidian Vault academic paper management CLI.
-Integrates MinerU API (cloud PDF-to-Markdown), pdfplumber (local PDF-to-MD via --local flag),
-Crossref API (DOI references & citation lookup), PubMed E-utilities (cited-by queries),
-PyMuPDF title extraction (PDF rename), image garbage collection (clean_images),
-and YAML frontmatter for Obsidian wikilink citation graphs.
+Integrates MinerU API, pdfplumber, Crossref API, PubMed E-utilities, image GC,
+PyMuPDF title rename, and Obsidian wikilink citation graphs.
 """
 import argparse
 
@@ -36,11 +34,11 @@ def _cmd_remove_doi(args):
         print('未输入DOI')
         return
     modified = run_remove_doi(args.path, doi)
-    if not modified:
+    if modified:
+        for p, c in modified:
+            print(f'  [{c}行] {p.name}')
+    else:
         print('未找到匹配')
-        return
-    for p, c in modified:
-        print(f'  [{c}行] {p.name}')
 
 
 def main():
@@ -89,15 +87,10 @@ def main():
         return
 
     match args.command:
-        case 'pdf2md':
-            run_pdf2md(args.path_pdf, args.path_zip, args.path_md0,
+        case 'pdf2md' | 'pdf2md-local':
+            run_pdf2md(args.path_pdf, getattr(args, 'path_zip', None), args.path_md0,
                        args.enable_api_references, args.enable_cited_by, args.cited_by_max,
-                       local=args.local, path_images=args.path_images,
-                       ref_max_age=args.ref_max_age)
-        case 'pdf2md-local':
-            run_pdf2md(args.path_pdf, None, args.path_md0,
-                       args.enable_api_references, args.enable_cited_by, args.cited_by_max,
-                       local=True, path_images=args.path_images,
+                       local=args.command == 'pdf2md-local', path_images=args.path_images,
                        ref_max_age=args.ref_max_age)
         case 'markdown':
             run_markdown_graph(args.path)

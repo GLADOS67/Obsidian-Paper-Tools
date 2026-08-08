@@ -1,4 +1,4 @@
-"""/s: DOI (Digital Object Identifier) regex, repair & canonicalization.
+"""/s: DOI regex, repair & canonicalization.
 """
 import re
 from functools import lru_cache
@@ -25,13 +25,13 @@ PATTERN_DOI_REPAIR2 = re.compile(
 PATTERN_TAIL_PARENS = re.compile(r'[)）].*')
 PATTERN_FS_INVALID = re.compile(r'[\\:*?"<>|]')
 PATTERN_COLLAPSE = re.compile(r'[￥_\s]+')
-PATTERN_DOI_SPLICE = re.compile(r'(?<=[/\-._;():])\s(?=[-A-Za-z0-9._;()/:])', re.IGNORECASE)
+PATTERN_DOI_SPLICE = re.compile(r'(?<=[/\-._;():])[ \t](?=[-A-Za-z0-9._;()/:])', re.IGNORECASE)
 PATTERN_PURE_ALPHA_SUFFIX = re.compile(r'^10\.\d{4,9}/[A-Za-z]+$', re.IGNORECASE)
 _RE_URL_SPLIT = re.compile(r'https?://')
 _RE_ID_TAIL = re.compile(r'\.?\(?(?:PMID|PMCID):?\s*\d+\)?\.?$', re.IGNORECASE)
 _RE_YEAR_OR_DOTS_TAIL = re.compile(r'\(\d{4}\)\.?$|\.+$')
 
-UNICODE_DASH_TABLE = str.maketrans('\u2010\u2011\u2013\u2014', '----')
+UNICODE_DASH_TABLE = str.maketrans('\u2010\u2011\u2013\u2014\u2015', '-----')
 PDF_ARTIFACTS = str.maketrans('', '', '\u200b\u200c\u200d\ufeff\u00ad\u200e\u200f\u2028\u2029')
 SMART_QUOTE_TABLE = str.maketrans({
     '\u201c': '"', '\u201d': '"', '\u2018': "'", '\u2019': "'",
@@ -65,8 +65,7 @@ def process_doi(doi_raw: str) -> Tuple[str, str]:
         doi_clean = PATTERN_TAIL_PARENS.sub('', doi_clean)
     doi_safe = PATTERN_FS_INVALID.sub('', doi_clean.replace('/', '￥'))
     doi_safe = PATTERN_COLLAPSE.sub('￥', doi_safe).strip('￥-_ ')
-    safe_filename = doi_safe[:200] or f'doi-{hash(doi_clean) & 0xFFFFFFFF:08x}'
-    return doi_clean, safe_filename
+    return doi_clean, doi_safe[:200] or f'doi-{hash(doi_clean) & 0xFFFFFFFF:08x}'
 
 
 def extract_doi_from_frontmatter(fm: dict) -> str | None:
@@ -91,10 +90,20 @@ def doi_from_doi_line(content: str) -> Optional[str]:
     return None
 
 
+def get_main_doi(fm: dict, content: str, all_dois: set = None) -> Optional[str]:
+    if main := extract_doi_from_frontmatter(fm):
+        return main
+    if doi := doi_from_doi_line(content):
+        return doi
+    if all_dois:
+        return process_doi(next(iter(all_dois)))[0]
+    if dois := find_plausible_dois(content):
+        return process_doi(dois[0])[0]
+    return None
+
+
 def make_wikilink(doi: str) -> str:
     doi = doi.strip().rstrip('.,;:')
     return f'[[{doi.replace("/", "￥")}|{doi}]]'
 
 
-def doi_wikilink(doi_raw: str) -> str:
-    return make_wikilink(process_doi(doi_raw)[0])

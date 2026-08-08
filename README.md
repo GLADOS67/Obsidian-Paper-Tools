@@ -313,7 +313,6 @@ DEFAULT_IMAGE_PATH = Path(r'C:\Vault\IMAGE')
 ```
 ├── cli.py                 # Entry point (argparse) / 入口
 ├── config.py              # Global path constants / 全局路径常量
-├── clean_cache.py         # Crossref cache cleaner / Crossref 缓存清洗
 ├── pyproject.toml
 ├── commands/
 │   ├── pdf2md.py          # MinerU batch pipeline / 批处理管道
@@ -701,7 +700,6 @@ DEFAULT_IMAGE_PATH = Path(r'C:\Vault\IMAGE')
 ```
 ├── cli.py                 # 入口 (argparse)
 ├── config.py              # 全局路径常量
-├── clean_cache.py         # Crossref 缓存清洗
 ├── pyproject.toml
 ├── commands/
 │   ├── pdf2md.py          # MinerU 批处理管道
@@ -776,37 +774,43 @@ DEFAULT_IMAGE_PATH = Path(r'C:\Vault\IMAGE')
 
 MIT
 
-## 增量对比 (vs v2.2)
+## 增量对比 (vs v2.3)
 
-| 维度 | v2.2 | v2.3 |
+| 维度 | v2.3 | v2.3 |
 | --- | --- | --- |
-| **新增文件** | — | `commands/clean_images.py`（81 行：图片垃圾回收器，扫描全库 .md 的 `![]()` 引用并与 `IMAGE/` 比对，零引用图片移入 `TRASH/Image/`，多线程扫描） |
-| **移除文件** | `clean_cache.py`（110 行：Crossref 缓存清洗器，删除 cite:null、归一化 DOI 键、去重合并） | — |
-| **README.md** | 含「增量对比 (vs v2.2)」整章；无 clean-images 文档；tagline 无「图片垃圾回收」；配置示例为旧 `DEFAULT_MD_PATH` | 删除 vs v2.2 章节；新增 `clean-images` 文档（EN+ZH）；命令表、tagline、目录树同步更新；配置示例改为新路径并加 `DEFAULT_IMAGE_PATH`（目录树仍残留 `clean_cache.py` 引用，文件已删） |
-| **cli.py** | `--path_md0` 默认 `C:\Vault\Claude\MDfrPDF`、`--path_images` 默认 `None`；无 clean-images 命令 | 默认改为 `C:\Vault\PENDING\Clippings`、`C:\Vault\IMAGE`；新增 `clean-images` 子命令（parser + match/case 分发） |
-| **config.py** | `DEFAULT_MD_PATH = C:\Vault\Claude\MDfrPDF`，无 `DEFAULT_IMAGE_PATH` | `DEFAULT_MD_PATH` 改 `C:\Vault\PENDING\Clippings`；新增 `DEFAULT_IMAGE_PATH = C:\Vault\IMAGE` |
-| **commands/archive.py** | `_replace_img` 仅从单一 `src_images` 复制；前缀用 `os.path.relpath` 相对路径；图片目标为各主题 `Clippings/images` | 多源查找（`src_images` + `DEFAULT_IMAGE_PATH`，跳过目标目录）；前缀改用 `dst_images.resolve().as_posix()` 绝对路径；图片统一归入 `C:\Vault\IMAGE` |
-| **commands/pdf2md.py** | 图片输出默认 `path_md0/'images'`；默认 `path_md0` 为旧路径 | 图片输出默认 `DEFAULT_IMAGE_PATH`；默认 `path_md0` 为新路径 |
-| **pyproject.toml** | description 含 "Crossref cache cleaner, PyMuPDF rename, pdfplumber" | 改为 "image GC"，移除上述描述词 |
-| **core/doi.py** | `repair_doi_text` 为 `for _ in range(5)` + 提前 break 的固定点循环 | 改为 `while text != prev` 固定点循环（等价，无最大迭代上限） |
-| **core/crossref_api.py** | docstring 含 3 行逐函数说明 | 精简为一行模块总述 |
-| **core/markdown_utils.py** | docstring 含 bracket-link 归一化说明 | 精简 docstring |
-| **core/obsidian_path.py** | docstring 含 SequenceMatcher 说明 | 精简 docstring |
-| **core/refs.py** | docstring 含 3 行逐函数说明 | 精简为一行模块总述 |
-| **commands/__init__.py** | docstring 无 clean_images | 新增 clean_images 说明行 |
-| **scripts/PDF2MD.bat** | 传 `--path_images "%current_dir%\Clippings\images"` | 移除 `--path_images` 参数 |
-| **scripts/PDF2MD-LOCAL.bat** | 传 `--path_images "%current_dir%\Clippings\images"` | 移除 `--path_images` 参数 |
-| **commands/{cited_by,crossref,markdown_graph,match,remove_doi,rename_pdf,trash}.py、core/{__init__,frontmatter}.py** | — | 逐字一致（9 个文件） |
+| **新增文件** | — | — |
+| **移除文件** | — | — |
+| **cli.py** | `pdf2md` / `pdf2md-local` 两个独立 case；`_cmd_remove_doi` 先判未匹配再循环输出 | 合并为 `case 'pdf2md' \| 'pdf2md-local'`（`getattr(args,'path_zip',None)`，`local=args.command=='pdf2md-local'`）；remove_doi 改为循环输出后再补「未找到匹配」；docstring 精简 |
+| **config.py** | 含 `CROSSREF_CACHE` 常量；docstring 5 行 | 删除 `CROSSREF_CACHE`（缓存改为函数参数传递）；docstring 精简为 1 行 |
+| **README.md** | 目录树 EN/ZH 两处残留 `clean_cache.py`；末尾含「增量对比 (vs v2.2)」整章 | 两处目录树删除 `clean_cache.py` 残留；删除 vs v2.2 整章为本次对比腾位 |
+| **commands/archive.py** | `_replace_img` 独立函数 + `counter` 列表；`link_map` 列表；`_find_parent` while p!=p.parent；`_try_copy` 先返回 hardlinked | 闭包 `_repl` + `nonlocal count` 内联；`link_config` 字典（PA/PT label）；`_find_parent` while True + 提前 return；`_try_copy` 先返回 copied；`dst_images` 提升至分支外；图片修复改 `if not (...) : continue` 卫语句 |
+| **commands/cited_by.py** | 本地 `_wikilink_doi`（split_wikilink）；`_collect_existing_dois`；`doi_wikilink` 写 cited_by | 改用 `core.refs.wikilink_doi`；改名 `_collect_existing`；`make_wikilink(process_doi(d)[0])`；`run_cited_by` 用 `not resolved.exists()` 统一判空 |
+| **commands/clean_images.py** | `PurePosixPath` + `threading.Lock` 进度；`_extract_local_names` 后置归一化 | 改 `os.path.basename`；删 Lock，`enumerate(as_completed)` 计进度；归一化提前；docstring 精简 |
+| **commands/crossref.py** | 模块级全局 `_cache = load_cache()`；本地 `_DASH_TABLE`；`_get_file_title` 独立函数；各 handler 无 cache 参数 | 缓存改为参数贯穿（`handle_input`/`process_file`/`_handle_*` 均收 `cache`）；复用 `core.doi.UNICODE_DASH_TABLE`；删 `_get_file_title`；`handle_input` 返回 bool；`_get_main_doi` 委托 `get_main_doi` |
+| **commands/markdown_graph.py** | `_parse_cited_by_entry` 手写 regex；`_update_doi_map` 返回元组；`_resolve_cited_by` 独立去重 | 复用 `wikilink_doi`；`_update_doi_map` 返回 None，`_rebuild_reference_list` 内联 used_name/is_special；`_resolve_cited_by` 复用 `_rebuild_reference_list`；`_resolve_self_doi` 改 `.partition('|')` |
+| **commands/match.py** | pt/pa/fe 各标量计数器；`_match_prop` 先查 existing 再查 path | 统计改嵌套 dict `stats`；`_match_prop` 先查 path 再判 existing；`_extract_doi_set` 简化；docstring 精简 |
+| **commands/pdf2md.py** | 6 个辅助函数：`read_text_file`/`read_json_file`/`_get_main_doi`/`_extract_dois_from_md`/`_pdf_worker`/`_detect_heading`；`doi_wikilink` | 全部内联（try/except 读 token/JSON/MD；lambda 提取 DOI；`_merge_paragraphs` while 条件重写）；改用 `core.doi.get_main_doi` 与 `make_wikilink`；docstring 精简 |
+| **commands/remove_doi.py** | docstring 2 行 | docstring 精简为 1 行（仅此差异） |
+| **commands/rename_pdf.py** | `ILLEGAL_CHARS`/`STATUS_SET` 局部；`_strip_author_suffix` 独立函数；`_is_title_junk` 多分支 | `str.maketrans` 内联；`STATUS_SET` 提升为模块级；后缀剥离内联进 `_clean_title`；`_is_title_junk` 合并条件；`KEYWORDS_SKIP` 常量；docstring 精简 |
+| **commands/trash.py** | 纯子目录归档（21 行），无图片逻辑 | 新增图片 GC 集成（88 行）：`_scan_referenced`（复用 `clean_images._scan_one`）、`_trash_unreferenced`、`_extract_entry`、`_restore_missing`（从 `DEFAULT_ZIP_PATH` 的 zip 恢复缺失图）；`run_trash` 先扫全库→冗余图移入 `TRASH/Image`→从 zip 恢复缺失 |
+| **commands/__init__.py** | docstring 10 行逐模块说明 | 精简为 2 行模块总述 |
+| **core/crossref_api.py** | `cache = {} if cache is None else cache`；`fetch_references` 顺带缓存 `issued:` 年份；`get_cited_by_pubmed` 缓存命中走 `_finalize` | `cache = cache or {}`；删 issued 顺带缓存（供独立 `get_issued_year` 请求）；`get_cited_by_pubmed` 缓存命中提前 return |
+| **core/doi.py** | `PATTERN_DOI_SPLICE` 用 `\s`；`UNICODE_DASH_TABLE` 4 字符；含 `doi_wikilink` | `[ \t]` 限定空格；加 `\u2015` 第 5 字符；**新增 `get_main_doi()`**（自 pdf2md 上收）；删除 `doi_wikilink` |
+| **core/frontmatter.py** | `for enc in ('utf-8','gbk')` 循环解码 | 改 try/except 嵌套（utf-8→gbk→replace）；docstring 精简 |
+| **core/markdown_utils.py** | `_fix_img` 先 `is_local` 赋值再返回 | 内联 `is_local` 于 return 表达式；docstring 精简 |
+| **core/obsidian_path.py** | `_fuzzy_search` 仅 SequenceMatcher；`resolve_input_path` 多级 if 逐条返回 | `_fuzzy_search` 先精确匹配 stem 再 fuzzy；candidates 改为 for 循环返回 |
+| **core/refs.py** | `build_existing_dois` 循环；`process_existing_references` 双分支；无 wikilink_doi | 集合推导式；`process_existing_references` 统一 key 去重（wikilink/裸文本）；**新增 `wikilink_doi()`**（自 cited_by 上收） |
+| **core/__init__.py** | docstring 6 行逐模块说明 | 精简为 1 行模块总述 |
 
 ### 关键变化
 
-- **核心主题：图片垃圾回收（image GC）**。v2.3 移除 `clean_cache.py`（Crossref 缓存清洗器，110 行），取而代之新增 `commands/clean_images.py`（81 行）——扫描整个 Vault 的 .md，从 `![]()` 提取引用文件名，与 `C:\Vault\IMAGE` 实际文件比对，零引用图片 `shutil.move` 至 `TRASH/Image/`，多线程扫描并每 200 条打印进度。
-- **图片目录统一为 `C:\Vault\IMAGE`**：`config.py` 新增 `DEFAULT_IMAGE_PATH`；`pdf2md` / `pdf2md-local` 图片输出默认从 `path_md0/images` 改为 `IMAGE`；`archive.py` 将各主题 `Clippings/images` 目标改为统一 `IMAGE`，并回退到该目录查找图片来源。
-- **默认 MD 输出路径变更**：`DEFAULT_MD_PATH` 由 `C:\Vault\Claude\MDfrPDF` 改为 `C:\Vault\PENDING\Clippings`（config.py、cli.py `--path_md0`、pdf2md.py 三处同步）。
-- **CLI 新增 `clean-images` 命令**：`cli.py` 新增 parser 与 `match/case` 分发，调用 `run_clean_images()`（无参数，读 config 默认值）。
-- **archive.py 链接前缀改为绝对路径**：`_fix_image_paths` 由 `os.path.relpath(dst_images, md_file.parent)` 相对前缀改为 `dst_images.resolve().as_posix() + '/'` 绝对前缀。
-- **`repair_doi_text` 循环改写（等价）**：`for _ in range(5)` + 提前 break 改为 `while text != prev` 固定点。
-- **README 遗留不一致**：v2.3 删除了 `clean_cache.py` 文件，但 README 目录树（EN 与 ZH 两处）仍保留 `clean_cache.py` 引用；v2.2 末尾「增量对比 (vs v2.2)」整章被删除，为本次对比腾出位置。
-- **docstring 精简**：core/crossref_api、core/doi、core/refs、core/markdown_utils、core/obsidian_path 共 5 个模块删除了逐函数 docstring 行，仅保留模块总述。
-- **脚本去参**：`scripts/PDF2MD.bat` 与 `scripts/PDF2MD-LOCAL.bat` 移除 `--path_images` 参数，改依赖新默认值。
-- **9 个文件逐字一致**：commands/{cited_by,crossref,markdown_graph,match,remove_doi,rename_pdf,trash}.py 与 core/{__init__,frontmatter}.py 无任何改动。
+- **trash 命令扩展为图片 GC + 归档二合一**：`commands/trash.py` 从 21 行扩至 88 行，新增全库扫描（复用 `clean_images._scan_one`）→ 未引用图片移入 `TRASH/Image/` → 并从 `C:\Vault\ZIP` 的 zip 归档恢复缺失图片（`_restore_missing`），再执行原有子目录归档。
+- **缓存与 DOI 工具下沉复用**：`core/doi.py` 新增 `get_main_doi()`（pdf2md/crossref 共用）、删除 `doi_wikilink`；`core/refs.py` 新增 `wikilink_doi()`（cited_by/markdown_graph 共用）；pdf2md 中 6 个辅助函数全部内联删除。
+- **crossref 去掉模块级全局 `_cache`**：缓存对象改为函数参数贯穿 `handle_input`→`process_file`/`_handle_*`，交互循环 `run_crossref_interactive` 每轮 `load_cache`/`save_cache`。
+- **Crossref 缓存不再顺带写 `issued:` 年份**：`fetch_references` 移除缓存首发年份逻辑，`get_issued_year` 独立请求缓存；`get_cited_by_pubmed` 缓存命中提前返回。
+- **config.py 删除 `CROSSREF_CACHE` 常量**：硬编码缓存路径移除，随新缓存参数化设计。
+- **cli.py 合并 pdf2md 双分支**：`pdf2md` / `pdf2md-local` 合并为单一 case，`local` 由子命令名判定，`path_zip` 用 `getattr` 兜底。
+- **README 清理历史残留**：EN/ZH 项目结构树删除 `clean_cache.py`（v2.3 遗留引用）；删除「增量对比 (vs v2.2)」整章。
+- **docstring 全面精简**：21 个改动文件中 20 个 docstring 从多行缩为 1 行模块总述（`remove_doi.py` 仅 docstring 差异）。
+- **多处等价重构**：archive `_try_copy` 返回值顺序、`_find_parent` 循环改写、obsidian_path 精确匹配优先、frontmatter 解码改 try/except、doi `UNICODE_DASH_TABLE` 增 `\u2015`、`PATTERN_DOI_SPLICE` 限空格等。
+- **逐字一致**：`pyproject.toml` 与全部 10 个 `scripts/*.bat` 无任何改动；文件清单两版完全相同（无新增/无移除）。

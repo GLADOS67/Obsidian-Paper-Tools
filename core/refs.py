@@ -2,7 +2,7 @@
 """
 from typing import Iterable, List, Optional, Tuple
 
-from core.doi import process_doi
+from core.doi import PATTERN_DOI, is_plausible_doi, process_doi
 
 
 def split_wikilink(ref: str) -> Optional[Tuple[str, str]]:
@@ -27,12 +27,7 @@ def new_doi_wikilinks(dois: Iterable[str], seen: set) -> List[str]:
 
 
 def build_existing_dois(references: List[str]) -> set:
-    dois = set()
-    for ref in references:
-        parsed = split_wikilink(ref)
-        if parsed and parsed[1]:
-            dois.add(parsed[1].lower())
-    return dois
+    return {p[1].lower() for ref in references if (p := split_wikilink(ref)) and p[1]}
 
 
 def process_existing_references(refs: List[str]) -> List[str]:
@@ -40,14 +35,21 @@ def process_existing_references(refs: List[str]) -> List[str]:
     for ref in refs:
         ref = ref.strip()
         parsed = split_wikilink(ref)
-        if parsed is None or not parsed[1]:
-            if ref not in seen:
-                seen.add(ref)
-                processed.append(ref)
+        if parsed and parsed[1]:
+            name, display = parsed[0].replace('/', '￥'), parsed[1]
+            key = display.lower()
+        else:
+            key = ref
+            display = None
+        if key in seen:
             continue
-        name, display = parsed[0].replace('/', '￥'), parsed[1]
-        display_lower = display.lower()
-        if display_lower not in seen:
-            seen.add(display_lower)
-            processed.append(f'[[{name}|{display}]]')
+        seen.add(key)
+        processed.append(f'[[{name}|{display}]]' if display else ref)
     return processed
+
+
+def wikilink_doi(ref: str) -> Optional[str]:
+    parsed = split_wikilink(ref.strip()) if isinstance(ref, str) else None
+    name_part, doi_part = (parsed[0], parsed[1]) if parsed else ('', ref.strip())
+    m = PATTERN_DOI.search(doi_part)
+    return process_doi(m.group(0))[0] if m and is_plausible_doi(m.group(0)) else None

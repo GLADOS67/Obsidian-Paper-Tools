@@ -1,22 +1,15 @@
 """/s: PubMed E-utilities cited-by query for Obsidian notes.
-Uses NCBI Entrez esearch/elink/esummary to find papers citing a given DOI,
-writes citing DOIs as wikilinks into Obsidian frontmatter cited_by field.
 """
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from core.crossref_api import get_cited_by_pubmed, load_cache, save_cache
-from core.doi import (PATTERN_DOI, doi_from_doi_line, doi_wikilink,
-                      extract_doi_from_frontmatter, process_doi, repair_doi_text)
+from core.doi import (PATTERN_DOI, doi_from_doi_line, extract_doi_from_frontmatter,
+                       get_main_doi, make_wikilink, process_doi, repair_doi_text)
 from core.frontmatter import cited_by_fresh, dump_frontmatter, parse_frontmatter_str
 from core.obsidian_path import resolve_input_path
-from core.refs import split_wikilink
-
-
-def _wikilink_doi(ref) -> Optional[str]:
-    parsed = split_wikilink(ref) if isinstance(ref, str) else None
-    return process_doi(m.group(0))[0] if (parsed and (m := PATTERN_DOI.search(parsed[1]))) else None
+from core.refs import wikilink_doi
 
 
 def _get_main_doi_from_md(fm: dict, body: str) -> Optional[str]:
@@ -25,19 +18,17 @@ def _get_main_doi_from_md(fm: dict, body: str) -> Optional[str]:
         return main
     refs = fm.get('reference', [])
     if refs and isinstance(refs[0], str):
-        first = refs[0]
-        inner = first[2:-2] if first.startswith('[[') and first.endswith(']]') else first
-        doi_part = inner.split('|', 1)[-1] if '|' in inner else inner
-        m = PATTERN_DOI.search(doi_part)
+        doi = wikilink_doi(refs[0])
+        if doi:
+            return doi
+        m = PATTERN_DOI.search(refs[0].split('|', 1)[-1])
         if m:
             return process_doi(m.group(0))[0]
     m = PATTERN_DOI.search(repair_doi_text(body))
-    if m:
-        return process_doi(m.group(0))[0]
-    return doi_from_doi_line(body)
+    return process_doi(m.group(0))[0] if m else doi_from_doi_line(body)
 
 
-def _collect_existing_dois(md_dir: Path) -> set:
+def _collect_existing(md_dir: Path) -> set:
     existing = set()
     for md_file in md_dir.glob('*.md'):
         try:
@@ -48,7 +39,7 @@ def _collect_existing_dois(md_dir: Path) -> set:
             existing.add(main.lower())
         existing.update(
             d.lower() for key in ('reference', 'cited_by')
-            for ref in fm.get(key, []) if (d := _wikilink_doi(ref))
+            for ref in fm.get(key, []) if (d := wikilink_doi(ref))
         )
     return existing
 
@@ -58,17 +49,13 @@ def run_cited_by(path: str, max_rows: int = 10) -> None:
     if resolved is None:
         print(f'无法解析Obsidian路径: {path}')
         return
-    if resolved.is_file():
-        md_files = [resolved]
-    elif resolved.is_dir():
-        md_files = sorted(resolved.glob('*.md'))
-    else:
+    if not resolved.exists():
         print(f'路径不存在: {resolved}')
         return
 
+    md_files = [resolved] if resolved.is_file() else sorted(resolved.glob('*.md'))
     cache = load_cache()
-    parent_dir = resolved if resolved.is_dir() else resolved.parent
-    existing_dois = _collect_existing_dois(parent_dir)
+    existing = _collect_existing(resolved if resolved.is_dir() else resolved.parent)
 
     for md_file in md_files:
         try:
@@ -87,12 +74,12 @@ def run_cited_by(path: str, max_rows: int = 10) -> None:
             print(f'[SKIP] {md_file.name}: cited_by_date={fm.get("cited_by_date")} (距今<1个月)')
             continue
 
-        count, citing_dois = get_cited_by_pubmed(main_doi, cache, existing_dois, max_rows)
+        count, citing_dois = get_cited_by_pubmed(main_doi, cache, existing, max_rows)
         fm.pop('cited_by_count', None)
         fm['cited_by_date'] = datetime.now().strftime('%Y-%m-%d')
         if citing_dois:
-            fm['cited_by'] = [doi_wikilink(d) for d in citing_dois]
-            existing_dois.update(d.lower() for d in citing_dois)
+            fm['cited_by'] = [make_wikilink(process_doi(d)[0]) for d in citing_dois]
+            existing.update(d.lower() for d in citing_dois)
             print(f'[OK] {md_file.name}: cited_by_date={fm["cited_by_date"]}  新增 {len(citing_dois)} 篇')
         else:
             fm.pop('cited_by', None)

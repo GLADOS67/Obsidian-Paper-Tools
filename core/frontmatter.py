@@ -1,5 +1,4 @@
-"""/s: YAML frontmatter (YFM / Jekyll-style --- ) parser & dumper for Obsidian .md notes.
-Uses PyYAML with CSafeLoader/CSafeDumper when available for speed.
+"""/s: YAML frontmatter parser & dumper for Obsidian .md notes.
 """
 import re
 from datetime import datetime
@@ -29,14 +28,13 @@ def parse_frontmatter_str(content: str) -> Tuple[Dict, str]:
 
 def parse_frontmatter_file(path: Path) -> Tuple[Optional[Dict], str]:
     data = path.read_bytes()
-    for enc in ('utf-8', 'gbk'):
+    try:
+        raw = data.decode('utf-8').lstrip('\ufeff')
+    except UnicodeDecodeError:
         try:
-            raw = data.decode(enc).lstrip('\ufeff')
-            break
-        except (UnicodeDecodeError, LookupError):
-            continue
-    else:
-        raw = data.decode('utf-8', errors='replace')
+            raw = data.decode('gbk').lstrip('\ufeff')
+        except UnicodeDecodeError:
+            raw = data.decode('utf-8', errors='replace')
     fm, rest = parse_frontmatter_str(raw)
     return (fm if fm else None), rest
 

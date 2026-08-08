@@ -1,6 +1,4 @@
-"""/s: PyMuPDF title extraction → auto-rename PDF files.
-Extracts metadata title or first-page heading via PyMuPDF (fitz), cleans junk titles
-(status markers, degree suffixes, MSIDs), and renames PDFs to sanitized filenames.
+"""/s: PyMuPDF title extraction → auto-rename PDFs.
 """
 import os
 import re
@@ -14,7 +12,6 @@ JUNK_TITLES = {
     'lippincott williams and wilkins', 'lippincott williams & wilkins',
     'wolters kluwer', 'springer', 'elsevier'
 }
-ILLEGAL_CHARS = str.maketrans({c: '' for c in r'<>:"/\|?*'})
 
 DOI_RE = re.compile(r'DOI[:;\s]*10\.\d{4,9}/?[-A-Za-z0-9._;()/:]*', re.IGNORECASE)
 STATUS_MARKERS = [
@@ -43,40 +40,30 @@ MSID_RE = re.compile(
     re.IGNORECASE
 )
 SOURCE_EXT_RE = re.compile(r'\.(?:qxd|indd|docx?|pptx?|ai|cdr|psd|pub|idml)\b', re.IGNORECASE)
-
-
-def _strip_author_suffix(title):
-    title = re.sub(r',?\s+et\s+al\.?\s*$', '', title, flags=re.IGNORECASE)
-    m = AUTHOR_DEGREE_RE.search(title)
-    if m:
-        return title[:m.start()].strip()
-    return title
+STATUS_SET = frozenset(STATUS_MARKERS)
 
 
 def _is_title_junk(title):
     if not title or len(title) < 5:
         return True
     tlower = title.lower()
-    if tlower in JUNK_TITLES:
+    if tlower in JUNK_TITLES or any(tlower.startswith(j) for j in JUNK_TITLES if len(j) >= 5):
         return True
     words = title.split()
     n_words = len(words)
     if n_words == 1 and title[0].isupper():
         return True
     if title.isupper():
-        if n_words <= 6 and all(len(w) <= 4 for w in words):
-            return True
-        if sum(1 for w in words if len(w) == 1) >= 3 and len(title) < 40:
+        short_words = n_words <= 6 and all(len(w) <= 4 for w in words)
+        many_one_char = sum(1 for w in words if len(w) == 1) >= 3 and len(title) < 40
+        if short_words or many_one_char:
             return True
     bad = sum(1 for c in title if ord(c) < 32 or ord(c) in (0xFFFD, 65533))
-    if bad / len(title) > 0.3:
-        return True
-    return any(tlower.startswith(j) for j in JUNK_TITLES if len(j) >= 5)
+    return bad / len(title) > 0.3
 
 
 def _clean_title(raw_title):
-    title = raw_title.strip()
-    title = DOI_RE.sub(' ', title)
+    title = DOI_RE.sub(' ', raw_title.strip())
     tlower = title.lower()
     for marker in STATUS_MARKERS:
         idx = tlower.find(marker)
@@ -84,9 +71,11 @@ def _clean_title(raw_title):
             title = title[idx + len(marker):].strip()
             tlower = title.lower()
             break
-    title = _strip_author_suffix(title)
-    title = re.sub(r'\s+', ' ', title).strip(' ,-')
-    return title
+    title = re.sub(r',?\s+et\s+al\.?\s*$', '', title, flags=re.IGNORECASE)
+    m = AUTHOR_DEGREE_RE.search(title)
+    if m:
+        title = title[:m.start()].strip()
+    return re.sub(r'\s+', ' ', title).strip(' ,-')
 
 
 def _get_metadata_title(doc):
@@ -124,7 +113,7 @@ def _get_first_page_title(doc):
                     spans.append({'size': span["size"], 'text': text, 'y': line_y, 'x': line_x})
     if not spans:
         return None
-    sizes = sorted(set(s['size'] for s in spans), reverse=True)
+    sizes = sorted({s['size'] for s in spans}, reverse=True)
     top_spans = [s for s in spans if s['y'] < page_h * 0.55]
     for sz in sizes:
         same = [s for s in top_spans if abs(s['size'] - sz) < 0.5]
@@ -132,9 +121,7 @@ def _get_first_page_title(doc):
             continue
         same.sort(key=lambda s: (s['y'], s['x']))
         if len(sizes) == 1:
-            candidate = _extract_from_flat_page(same, page_h)
-            if candidate:
-                return candidate
+            return _extract_from_flat_page(same, page_h)
         seen, parts = set(), []
         for s in same:
             key = s['text'].lower()
@@ -165,7 +152,7 @@ def _extract_from_flat_page(spans, page_h):
     if cur:
         blocks.append(cur)
 
-    STATUS_SET = frozenset(STATUS_MARKERS)
+    KEYWORDS_SKIP = ('department', 'university', 'school of', 'hospital', 'institute', 'corresponding author')
     good_blocks = []
     for blk in blocks:
         combined = ' '.join(t for _, t in blk).lower()
@@ -173,12 +160,10 @@ def _extract_from_flat_page(spans, page_h):
             continue
         if AUTHOR_DEGREE_RE.search(combined):
             continue
-        if any(kw in combined for kw in ('department', 'university', 'school of',
-                                          'hospital', 'institute', 'corresponding author')):
+        if any(kw in combined for kw in KEYWORDS_SKIP):
             continue
-        if len(combined) < 20:
-            continue
-        good_blocks.append(blk)
+        if len(combined) >= 20:
+            good_blocks.append(blk)
     if not good_blocks:
         return None
     best = max(good_blocks, key=lambda b: sum(len(t) for _, t in b))
@@ -186,9 +171,8 @@ def _extract_from_flat_page(spans, page_h):
 
 
 def _sanitize_filename(title):
-    title = title.translate(SMART_QUOTE_TABLE)
-    title = title.replace('\n', ' ').replace('\r', ' ')
-    title = title.translate(ILLEGAL_CHARS)
+    title = title.translate(SMART_QUOTE_TABLE).replace('\n', ' ').replace('\r', ' ')
+    title = title.translate(str.maketrans({c: '' for c in r'<>:"/\|?*'}))
     title = ' '.join(title.split())
     if len(title) > 250:
         cut = title[:251].rfind(' ')
@@ -220,8 +204,7 @@ def run_rename_pdf(directory):
             title = _get_metadata_title(doc) or _get_first_page_title(doc)
         finally:
             doc.close()
-        if title:
-            title = _clean_title(title)
+        title = _clean_title(title) if title else ''
         if not title or _is_title_junk(title):
             skipped += 1
             continue
