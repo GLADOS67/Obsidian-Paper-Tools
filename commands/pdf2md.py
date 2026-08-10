@@ -1,4 +1,4 @@
-﻿"""/s: MinerU API + pdfplumber dual-mode PDF-to-Markdown with Crossref/PubMed enrichment.
+"""/s: MinerU + pdfplumber PDF-to-Markdown with Crossref/PubMed enrichment.
 """
 import json
 import multiprocessing
@@ -19,10 +19,10 @@ import requests
 from core.crossref_api import (fetch_references, get_doi_from_citation,
                                get_cited_by_pubmed, get_issued_year,
                                load_cache, save_cache)
-from core.doi import (PATTERN_DOI, extract_doi_from_frontmatter,
-                       find_plausible_dois, get_main_doi, make_wikilink,
+from core.doi import (PATTERN_DOI, find_plausible_dois, get_main_doi, make_wikilink,
                        normalize_unicode_dashes, process_doi, repair_doi_text)
-from core.frontmatter import cited_by_fresh, dump_frontmatter, parse_frontmatter_str
+from core.frontmatter import (build_doi_set, cited_by_fresh, dump_frontmatter,
+                               parse_frontmatter_str)
 from core.markdown_utils import clean_markdown_body
 from core.refs import build_existing_dois, new_doi_wikilinks, process_existing_references
 from config import DEFAULT_IMAGE_PATH
@@ -35,28 +35,18 @@ URL_PATTERN = re.compile(
 
 
 def extract_text(obj):
-    if isinstance(obj, dict):
-        if isinstance(obj.get('content'), str):
-            yield obj['content']
-        for v in obj.values():
-            yield from extract_text(v)
-    elif isinstance(obj, list):
-        for item in obj:
-            yield from extract_text(item)
-    elif isinstance(obj, str):
-        yield obj
-
-
-def _build_clippings_all_doi_set(md_dir):
-    existing = set()
-    for md_file in md_dir.glob('*.md'):
-        try:
-            fm, _ = parse_frontmatter_str(md_file.read_text(encoding='utf-8'))
-        except Exception:
-            continue
-        if main := extract_doi_from_frontmatter(fm):
-            existing.add(main.lower())
-    return existing
+    stack = [obj]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            content = item.get('content')
+            if isinstance(content, str):
+                yield content
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, str):
+            yield item
 
 
 def apply_upload_urls(token, files_info, url):
@@ -86,20 +76,14 @@ def _append_crossref_refs(fm, rest, main_doi, crossref_cache, md_name):
     references = fetch_references(main_doi, crossref_cache)
     if not references:
         return main_doi, None
-    existing_dois = build_existing_dois(fm.get('reference', []))
-    ref_dois = new_doi_wikilinks((r['doi'] for r in references if r['doi']), existing_dois)
+    ref_dois = new_doi_wikilinks((r['doi'] for r in references if r['doi']),
+                                 build_existing_dois(fm.get('reference', [])))
     if ref_dois:
         fm['reference'] = fm.get('reference', []) + ref_dois
     if '## 参考文献' in rest:
         return main_doi, None
-    lines = []
-    for i, ref in enumerate(references, 1):
-        text, doi_str = ref.get('text', ''), ref.get('doi', '')
-        if not text and not doi_str:
-            continue
-        line = f'{i}. {text}' if text else f'{i}. '
-        line += f' DOI: {doi_str}' if doi_str else ''
-        lines.append(line)
+    lines = [f'{i}. {r.get("text","")}{" DOI: "+r.get("doi","") if r.get("doi") else ""}'
+             for i, r in enumerate(references, 1) if r.get('text') or r.get('doi')]
     if lines:
         print(f'已将 {len(references)} 条参考文献添加到 {md_name}')
     return main_doi, '\n\n## 参考文献\n' + '\n'.join(lines) if lines else None
@@ -191,10 +175,10 @@ def _merge_new_dois(fm, all_dois, md_name):
 
 
 def _pin_main_doi(fm, main_doi, md_stem):
-    main_doi_lower = main_doi.lower()
+    lower = main_doi.lower()
     refs = [r for r in fm.get('reference', [])
             if not (r.startswith('[[') and r.endswith(']]') and '|' in r
-                    and r[2:-2].split('|', 1)[1].strip().lower() == main_doi_lower)]
+                    and r[2:-2].split('|', 1)[1].strip().lower() == lower)]
     refs.insert(0, f'[[{md_stem}|{main_doi}]]')
     fm['reference'] = refs
 
@@ -220,32 +204,26 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_ca
 
     all_dois = dois_md | json_dois | dois_pdf
     content = _replace_urls(content, urls)
-
     fm, rest = parse_frontmatter_str(content)
     main_doi = get_main_doi(fm, content, all_dois)
     if main_doi is None and enable_api_refs and not all_dois:
-        title = fm.get('title', md_dst.stem)
-        result = get_doi_from_citation(title, crossref_cache)
-        if result:
-            main_doi = process_doi(result[0])[0]
-            print(f'Crossref标题回退确认主DOI: {main_doi}')
-        else:
-            print(f'Crossref标题回退无结果: {title}')
+        result = get_doi_from_citation(fm.get('title', md_dst.stem), crossref_cache)
+        main_doi = process_doi(result[0])[0] if result else None
+        method = '确认主DOI' if result else '无结果'
+        print(f'Crossref标题回退{method}: {fm.get("title", md_dst.stem)}')
 
     if enable_cited_by and main_doi:
         if clippings_doi_set is None:
-            clippings_doi_set = _build_clippings_all_doi_set(md_dst.parent)
+            clippings_doi_set = build_doi_set(md_dst.parent)
         _update_cited_by(fm, main_doi, crossref_cache, cited_by_max, clippings_doi_set)
 
     existing_refs = fm.get('reference', [])
     if existing_refs:
         fm['reference'] = process_existing_references(existing_refs)
 
-    # 首发日期闸门: 超过ref_max_age年的老论文不添加reference, 仅保留主DOI(避免老文献引用膨胀)
     add_refs = True
     if main_doi:
         year = get_issued_year(main_doi, crossref_cache)
-        # year为None(Crossref无日期)时视为范围内, 正常添加
         if year is not None and datetime.now().year - year > ref_max_age:
             add_refs = False
             print(f'超{ref_max_age}年({year})，仅添加主DOI: {md_dst.name}')
@@ -489,7 +467,7 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
         for future in as_completed(futures):
             future.result()
 
-    clippings_doi_set = _build_clippings_all_doi_set(path_md0) if enable_cited_by else None
+    clippings_doi_set = build_doi_set(path_md0) if enable_cited_by else None
     for idx, f_info in enumerate(files, 1):
         file_name = f_info['file_name']
         data_id = f_info['data_id']
@@ -567,7 +545,7 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
     print(f'共发现 {len(pdf_files)} 个PDF待处理')
 
     if local:
-        clippings_doi_set = _build_clippings_all_doi_set(pm) if enable_cited_by else None
+        clippings_doi_set = build_doi_set(pm) if enable_cited_by else None
         _run_local_batch(pdf_files, path_md0, pp, enable_api_refs,
                         crossref_cache, enable_cited_by, cited_by_max,
                         images_dir, clippings_doi_set, ref_max_age)

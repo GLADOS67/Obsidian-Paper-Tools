@@ -1,4 +1,4 @@
-﻿"""/s: Crossref API reference tool (4 modes: file/takeover/local/doi).
+"""/s: Crossref API reference tool (4 modes).
 """
 import re
 from difflib import SequenceMatcher
@@ -17,6 +17,14 @@ from core.refs import new_doi_wikilinks, process_existing_references, split_wiki
 
 RE_MD_HEADING = re.compile(r'^#\s+(.+)', re.MULTILINE)
 RE_REF_ENTRY = re.compile(r'^\s*(?:\[(\d+)\]|(\d+)\.)\s+(.*)$', re.MULTILINE)
+
+_USAGE_MSG = (
+    '无法识别的输入格式，请检查：\n'
+    '1. 本地文件路径（支持Obsidian URI）\n'
+    '2. ￥文件路径 （全面接管：清空引用→标题搜DOI→重建）\n'
+    '3. local:文件路径 [doi:目标DOI] （处理本地参考文献，可指定主DOI）\n'
+    '4. doi:DOI号（拉取DOI的参考文献并导入到指定笔记）'
+)
 
 _NON_TITLE_RE = re.compile(
     r'^(authors?|abstract|introduction|methods?|results?|discussions?|'
@@ -106,12 +114,9 @@ def _resolve_doi_by_title(title: str, md_title: str, cache: dict) -> Optional[st
         return doi
     print('相似度不足，用Crossref标题重试...')
     retry = get_doi_from_citation(crossref_title, cache)
-    if retry:
-        verified_doi, _ = retry
-        print(f'重试→DOI: {verified_doi}')
-        return verified_doi
-    print(f'重试失败，仍使用原始DOI: {doi}')
-    return doi
+    verified_doi = retry[0] if retry else None
+    print(f'重试→DOI: {verified_doi or doi}')
+    return verified_doi or doi
 
 
 def process_file(file_path: Path, cache: dict) -> None:
@@ -122,8 +127,7 @@ def process_file(file_path: Path, cache: dict) -> None:
     if suffix not in ('.md', '.pdf'):
         print(f'不支持的文件类型: {suffix}')
         return
-    label = 'Markdown' if suffix == '.md' else 'PDF'
-    print(f'处理{label}: {file_path}')
+    print(f'处理{"Markdown" if suffix == ".md" else "PDF"}: {file_path}')
     content = file_path.read_text(encoding='utf-8') if suffix == '.md' else None
     fm_data, _ = parse_frontmatter_str(content) if content else ({}, '')
     pdf_path = file_path if suffix == '.pdf' else None
@@ -131,9 +135,8 @@ def process_file(file_path: Path, cache: dict) -> None:
     if not main_doi:
         print('未提取到 DOI，尝试标题搜索...')
         stem = file_path.stem
-        title = fm_data.get('title', stem)
         md_title = _get_md_title(content, fm_data, stem)
-        main_doi = _resolve_doi_by_title(title, md_title, cache)
+        main_doi = _resolve_doi_by_title(fm_data.get('title', stem), md_title, cache)
         if not main_doi:
             if suffix == '.md':
                 process_local_references_in_md(file_path, cache=cache)
@@ -255,6 +258,7 @@ def handle_input(input_str: str, cache: dict = None) -> bool:
         if not input_str:
             print('￥ 接管模式缺少文件路径')
             return True
+
     lower = input_str.lower()
     if lower.startswith('local:'):
         _handle_local_mode(input_str[6:].strip(), cache)
@@ -262,18 +266,12 @@ def handle_input(input_str: str, cache: dict = None) -> bool:
     if lower.startswith('doi:'):
         _handle_doi_import_mode(input_str[4:].strip(), cache)
         return True
+
     path = resolve_input_path(input_str, fallback_search=takeover)
-    if path and path.exists():
-        _handle_takeover_mode(path, cache) if takeover else process_file(path, cache)
+    if not (path and path.exists()):
+        print('￥ 接管模式：无法解析文件路径' if takeover else _USAGE_MSG)
         return True
-    if takeover:
-        print('￥ 接管模式：无法解析文件路径')
-        return True
-    print('无法识别的输入格式，请检查：')
-    print('1. 本地文件路径（支持Obsidian URI）')
-    print('2. ￥文件路径 （全面接管：清空引用→标题搜DOI→重建）')
-    print('3. local:文件路径 [doi:目标DOI] （处理本地参考文献，可指定主DOI）')
-    print('4. doi:DOI号（拉取DOI的参考文献并导入到指定笔记）')
+    _handle_takeover_mode(path, cache) if takeover else process_file(path, cache)
     return True
 
 

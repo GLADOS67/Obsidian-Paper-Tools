@@ -1,4 +1,4 @@
-"""/s: Obsidian wikilink DOI citation graph builder (reference/cited_by/被引).
+"""/s: Obsidian wikilink DOI citation graph builder.
 """
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -72,8 +72,7 @@ def _rebuild_reference_list(refs: List, unique_map: Dict[str, DoiEntry],
             _update_doi_map(display_doi, name_part, unique_map, citing_stem)
             entry = unique_map[dedup_key]
             used_name = entry[0][0] or entry[1][0] or process_doi(display_doi)[1]
-            is_special = not PATTERN_SAFE_DOI.match(name_part)
-            special_count += is_special
+            special_count += not PATTERN_SAFE_DOI.match(name_part)
         else:
             spec = _shared_spec(unique_map.get(dedup_key))
             used_name = spec or (process_doi(display_doi)[1]
@@ -119,9 +118,9 @@ def _process_unhandled_file(file: Path, content: str, fm: Dict, rest: str,
         print(f'    ⚠️  {file.name} 的 frontmatter 非字典类型，已重置为空字典')
         fm = {}
     rest = clean_markdown_body(rest)
-    removed = ','.join(k for k in ('author', 'published') if fm.pop(k, None) is not None)
+    removed = [k for k in ('author', 'published') if fm.pop(k, None) is not None]
     if removed:
-        print(f'    🗑️  删除 {file.name} 字段：{removed}')
+        print(f'    🗑️  删除 {file.name} 字段：{",".join(removed)}')
     unique_dois = {doi.lower(): doi for doi in find_plausible_dois(repair_doi_text(content))}
     doi_refs = [process_doi(doi) for doi in unique_dois.values()]
     refs, special_count = _rebuild_reference_list(doi_refs, unique_map, file.stem, is_existing=False)
@@ -189,7 +188,7 @@ def run_markdown_graph(directory: str) -> None:
         fm.pop('引用情况', None)
         try:
             file.write_text(dump_frontmatter(fm, rest), encoding='utf-8')
-            print(f'  ✅ {file.name} 更新完成：被引={len(citing_stems)}篇, 标签={fm["tags"][0]}')
+            print(f'  ✅ {file.name} 更新完成：被引={len(citing_stems)}篇，标签={fm["tags"][0]}')
         except Exception as e:
             print(f'  ❌ {file.name} 保存失败 → {str(e)}')
 

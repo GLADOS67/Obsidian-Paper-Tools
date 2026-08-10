@@ -1,4 +1,4 @@
-"""/s: Crossref REST API & PubMed Entrez E-utilities wrappers with JSON caching.
+"""/s: Crossref REST API & PubMed E-utilities with JSON caching.
 """
 import json
 import random
@@ -132,18 +132,17 @@ def get_cited_by_pubmed(doi: str, cache: dict = None,
 
     if count_key in cache and list_key in cache:
         total, all_dois = cache[count_key], cache[list_key]
-        new_dois = [d for d in all_dois if d.lower() not in existing_dois]
-        return total, new_dois[:max_rows]
+        return total, [d for d in all_dois if d.lower() not in existing_dois][:max_rows]
 
     def _finalize(total: int, all_dois: List[str]) -> Tuple[int, List[str]]:
-        cache[count_key] = total
-        cache[list_key] = all_dois
-        new_dois = [d for d in all_dois if d.lower() not in existing_dois]
-        return total, new_dois[:max_rows]
+        cache[count_key], cache[list_key] = total, all_dois
+        return total, [d for d in all_dois if d.lower() not in existing_dois][:max_rows]
 
     base = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
     try:
-        resp = _http.get(f'{base}/esearch.fcgi', params={'db': 'pubmed', 'term': f'{doi}[doi]', 'retmode': 'json'}, timeout=10)
+        resp = _http.get(f'{base}/esearch.fcgi',
+                         params={'db': 'pubmed', 'term': f'{doi}[doi]', 'retmode': 'json'},
+                         timeout=10)
         resp.raise_for_status()
         pmids = resp.json().get('esearchresult', {}).get('idlist', [])
     except Exception:
@@ -153,15 +152,15 @@ def get_cited_by_pubmed(doi: str, cache: dict = None,
     time.sleep(random.uniform(1.0, 2.0))
 
     try:
-        resp = _http.get(f'{base}/elink.fcgi', params={'dbfrom': 'pubmed', 'id': pmids[0], 'linkname': 'pubmed_pubmed_citedin', 'retmode': 'json'}, timeout=10)
+        resp = _http.get(f'{base}/elink.fcgi',
+                         params={'dbfrom': 'pubmed', 'id': pmids[0],
+                                 'linkname': 'pubmed_pubmed_citedin', 'retmode': 'json'},
+                         timeout=10)
         resp.raise_for_status()
         linksets = resp.json().get('linksets', [])
     except Exception:
         return _finalize(0, [])
-    links = []
-    if linksets:
-        for db in linksets[0].get('linksetdbs', []):
-            links.extend(db.get('links', []))
+    links = [l for db in (linksets and linksets[0].get('linksetdbs', []) or []) for l in db.get('links', [])]
     if not links:
         return _finalize(0, [])
 
@@ -171,11 +170,12 @@ def get_cited_by_pubmed(doi: str, cache: dict = None,
         batch = links[i:i + 100]
         time.sleep(random.uniform(1.0, 2.0))
         try:
-            resp = _http.get(f'{base}/esummary.fcgi', params={'db': 'pubmed', 'id': ','.join(batch), 'retmode': 'json'}, timeout=10)
+            resp = _http.get(f'{base}/esummary.fcgi',
+                             params={'db': 'pubmed', 'id': ','.join(batch), 'retmode': 'json'},
+                             timeout=10)
             resp.raise_for_status()
             results = resp.json().get('result', {})
         except Exception:
-            time.sleep(random.uniform(1.0, 2.0))
             continue
         for pmid_id in batch:
             item = results.get(str(pmid_id))

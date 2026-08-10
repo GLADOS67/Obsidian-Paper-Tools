@@ -1,4 +1,4 @@
-"""/s: Image garbage collector — scan vault .md for image references, move unreferenced images to TRASH.
+"""/s: Image garbage collector — scan for unreferenced images, move to TRASH.
 """
 import os
 import re

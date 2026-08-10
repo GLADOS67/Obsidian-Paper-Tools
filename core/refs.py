@@ -1,4 +1,4 @@
-"""/s: Wikilink reference utilities for Obsidian citation graphs.
+"""/s: Wikilink reference utilities.
 """
 from typing import Iterable, List, Optional, Tuple
 

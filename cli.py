@@ -1,6 +1,4 @@
-"""/s: Obsidian-Paper-Tools — Obsidian Vault academic paper management CLI.
-Integrates MinerU API, pdfplumber, Crossref API, PubMed E-utilities, image GC,
-PyMuPDF title rename, and Obsidian wikilink citation graphs.
+"""/s: Obsidian-Paper-Tools CLI — MinerU, pdfplumber, Crossref API, PubMed, image GC, reconcile, PyMuPDF rename, cite graph.
 """
 import argparse
 
@@ -14,6 +12,7 @@ from commands.archive import run_archive
 from commands.cited_by import run_cited_by, run_cited_by_interactive
 from commands.rename_pdf import run_rename_pdf
 from commands.clean_images import run_clean_images
+from commands.reconcile import run_reconcile
 
 
 def _add_api_args(parser, with_zip=True):
@@ -81,6 +80,10 @@ def main():
 
     sub.add_parser('clean-images', help='清理IMAGE中未被任何MD引用的图片')
 
+    p_rec = sub.add_parser('reconcile', help='全局调谐PA/FE/PT至正确vault或TRASH')
+    p_rec.add_argument('--dry-run', action='store_true', default=True)
+    p_rec.add_argument('--force', action='store_true')
+
     args = parser.parse_args()
     if args.command is None:
         parser.print_help()
@@ -110,6 +113,8 @@ def main():
             run_rename_pdf(args.directory)
         case 'clean-images':
             run_clean_images()
+        case 'reconcile':
+            run_reconcile(dry_run=not args.force)
 
 
 if __name__ == '__main__':

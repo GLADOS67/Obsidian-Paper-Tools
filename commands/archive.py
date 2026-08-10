@@ -1,4 +1,4 @@
-"""/s: Vault-to-vault Obsidian note archiver (hardlink/copy + image fixup).
+"""/s: Vault-to-vault note archiver.
 """
 import os
 import re
@@ -7,17 +7,12 @@ from pathlib import Path
 from typing import Optional
 
 from core.frontmatter import parse_frontmatter_str
-from config import DEFAULT_IMAGE_PATH
 
 
 def _norm(s: str) -> str:
     return re.sub(r'[-\u2013\u2014]', '-', s)
 
 
-PATTERN_IMG = re.compile(
-    r'(!\[[^\]]*\])\((?:[A-Z]:[\\/].*?images|\.\.[\\/]images)[\\/]([a-f0-9]+\.(?:jpg|png|jpeg|gif))\)',
-    re.IGNORECASE,
-)
 PATTERN_WIKILINK = re.compile(r'\[\[([^\]|]+)')
 
 
@@ -39,43 +34,11 @@ def _wikilink_page(raw) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def _fix_image_paths(md_file: Path, src_images: Path, dst_images: Path) -> int:
-    try:
-        content = md_file.read_text(encoding='utf-8')
-    except Exception:
-        return 0
-    prefix = dst_images.resolve().as_posix() + '/'
-    count = 0
-
-    def _repl(m):
-        nonlocal count
-        alt, img = m.group(1), m.group(2)
-        dst_img = dst_images / img
-        if not dst_img.exists() and src_images:
-            src_img = src_images / img
-            if src_img.exists():
-                shutil.copy2(src_img, dst_img)
-            elif DEFAULT_IMAGE_PATH and DEFAULT_IMAGE_PATH != dst_images:
-                src_img = DEFAULT_IMAGE_PATH / img
-                if src_img.exists():
-                    shutil.copy2(src_img, dst_img)
-        count += 1
-        return f'{alt}({prefix}{img})'
-
-    content = PATTERN_IMG.sub(_repl, content)
-    if count:
-        md_file.write_text(content, encoding='utf-8')
-    return count
-
-
 def _find_parent(path: Path, condition):
     p = path
-    while True:
-        if condition(p):
-            return p
-        if p == p.parent:
-            return p if condition(p) else None
+    while not condition(p) and p != p.parent:
         p = p.parent
+    return p if condition(p) else None
 
 
 def _find_clippings_dir(path: Path) -> Optional[Path]:
@@ -113,7 +76,6 @@ def run_archive(source: str, target: str) -> None:
 
     vault = _find_vault(dst_dir)
     src_clippings = _find_clippings_dir(src)
-    src_images = (src_clippings / 'images') if src_clippings else None
     src_vault_sub = src_clippings.parent if src_clippings else None
 
     rel = dst_dir.relative_to(vault)
@@ -121,7 +83,6 @@ def run_archive(source: str, target: str) -> None:
         dst_dir = dst_dir / 'Clippings'
         rel = dst_dir.relative_to(vault)
     mother = rel.parts[0]
-    dst_images = vault / 'IMAGE'
     if mother == 'Clippings':
         dst_claude = vault / 'Claude'
         dst_chi = vault / 'Chi'
@@ -132,16 +93,11 @@ def run_archive(source: str, target: str) -> None:
             dst_dir = dst_dir / 'PENDING'
 
     dst_dir.mkdir(parents=True, exist_ok=True)
-    dst_images.mkdir(parents=True, exist_ok=True)
     rows = []
 
     md_dst = dst_dir / src.name
     status = _try_copy(src, md_dst)
     rows.append(('.md', status, md_dst))
-
-    if src_images and md_dst.exists():
-        n = _fix_image_paths(md_dst, src_images, dst_images)
-        rows.append(('图片', f'{n}张', dst_images))
 
     src_claude = (src_vault_sub / 'Claude') if src_vault_sub else None
     src_chi = (src_vault_sub / 'Chi') if src_vault_sub else None
@@ -157,11 +113,6 @@ def run_archive(source: str, target: str) -> None:
         dst = dst_link / f'{page}.md'
         dst_link.mkdir(parents=True, exist_ok=True)
         rows.append((label, _try_copy(target_path, dst), dst if target_path.exists() else target_path))
-        if not (target_path.exists() and dst.exists() and src_images):
-            continue
-        fixed = _fix_image_paths(dst, src_images, dst_images)
-        if fixed:
-            rows.append((f'{label}图片', f'{fixed}张', str(dst)))
 
     if pa_name and src_vault_sub:
         claude_src = src_vault_sub / 'Claude'
@@ -171,15 +122,10 @@ def run_archive(source: str, target: str) -> None:
                 continue
             fig_dst = dst_claude / f'{tgt}_figures.md'
             rows.append(('Figures', _try_copy(figs, fig_dst), fig_dst))
-            if not (fig_dst.exists() and src_images):
-                continue
-            fixed = _fix_image_paths(fig_dst, src_images, dst_images)
-            if fixed:
-                rows.append(('Figures图片', f'{fixed}张', str(fig_dst)))
 
     status_map = {'hardlinked': '硬链接', 'copied': '已复制', 'exists': '跳过(已存在)', 'not found': '未找到'}
     for item, status, path in rows:
         status_disp = status_map.get(status, status)
         print(f'| {item} | {status_disp} | {path} |')
     print()
-    print('=== 请手动验证图片链接是否正确 ===')
+    print('=== 归档完成 ===')

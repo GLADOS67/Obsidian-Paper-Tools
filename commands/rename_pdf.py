@@ -47,16 +47,18 @@ def _is_title_junk(title):
     if not title or len(title) < 5:
         return True
     tlower = title.lower()
-    if tlower in JUNK_TITLES or any(tlower.startswith(j) for j in JUNK_TITLES if len(j) >= 5):
+    if tlower in JUNK_TITLES:
+        return True
+    if any(tlower.startswith(j) for j in JUNK_TITLES if len(j) >= 5):
         return True
     words = title.split()
     n_words = len(words)
     if n_words == 1 and title[0].isupper():
         return True
     if title.isupper():
-        short_words = n_words <= 6 and all(len(w) <= 4 for w in words)
-        many_one_char = sum(1 for w in words if len(w) == 1) >= 3 and len(title) < 40
-        if short_words or many_one_char:
+        if n_words <= 6 and all(len(w) <= 4 for w in words):
+            return True
+        if sum(1 for w in words if len(w) == 1) >= 3 and len(title) < 40:
             return True
     bad = sum(1 for c in title if ord(c) < 32 or ord(c) in (0xFFFD, 65533))
     return bad / len(title) > 0.3
@@ -221,6 +223,7 @@ def run_rename_pdf(directory):
         try:
             os.rename(str(pdf_path), str(new_path))
             renamed += 1
+            print(f'  {pdf_path.name} -> {new_path.name}')
         except OSError as e:
             print(f"  Rename failed: {pdf_path.name} -> {new_path.name} | {e}")
             skipped += 1

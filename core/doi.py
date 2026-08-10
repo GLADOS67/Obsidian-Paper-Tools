@@ -19,7 +19,7 @@ PATTERN_DOI_REPAIR = re.compile(
     re.IGNORECASE
 )
 PATTERN_DOI_REPAIR2 = re.compile(
-    r'(10\.\d{4,9}/[-A-Za-z0-9._;()/:]+)([./])\s+([-A-Za-z0-9]{2,}\.[-A-Za-z0-9._;()/:]+)',
+    r'(10\.\d{4,9}/[-A-Za-z0-9._;()/:]+)([./])[ \t]+([-A-Za-z0-9]{2,}\.[-A-Za-z0-9._;()/:]+)',
     re.IGNORECASE
 )
 PATTERN_TAIL_PARENS = re.compile(r'[)）].*')

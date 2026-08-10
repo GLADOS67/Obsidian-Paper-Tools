@@ -4,7 +4,9 @@
 
 ---
 
-# Obsidian-Paper-Tools 2.3 — 卢布林合并
+# Obsidian-Paper-Tools 3.0 — 织命者卡洛斯
+
+> **织命者卡洛斯 (Kairos, the Fate-Weaver)** — 太古双首龙，左首回忆过去（match 追溯引用链——获取论文引用的 DOI），右首望向未来（cited-by 顺流而下——谁引用了这篇论文？），却双双盲于此刻——而此刻正是 reconcile 必须跨越的裂隙。Kairos 在古希腊语中意为"关键时刻"。
 
 > Obsidian. Our Vault. 🔗 Links. 🧠 Graph. 📂 Open formats.
 > Our way of research.
@@ -36,7 +38,7 @@
 >
 > BECOME A VAULTTOOLER.
 >
-> *— Cloud & local PDF-to-Markdown · Image garbage collector · DOI citation graph · Crossref cache cleaner · PubMed API · PyMuPDF rename · note matching & archiving*
+> *— Cloud & local PDF-to-Markdown · Image GC · Reconcile PA/PT/FE links · DOI citation graph · PubMed API · note matching & archiving*
 
 ---
 
@@ -63,7 +65,8 @@ pip install .
 | --- | --- | --- |
 | `pdf2md` | MinerU PDF batch → Markdown + DOI enrichment | MinerU PDF 批处理 → Markdown + DOI 增强 |
 | `pdf2md-local` | pdfplumber offline PDF → Markdown (no cloud) | pdfplumber 本地 PDF → Markdown（无需上传） |
-| `clean-images` | Remove unreferenced images from IMAGE/ dir | 清理 IMAGE/ 中未被引用的图片文件 |
+| `clean-images` | Remove unreferenced images from IMAGE/ dir | 清理 IMAGE/ 中未被引用的图片 |
+| `reconcile` | Audit PA/PT/FE frontmatter links → content | 审计并修复 PA/PT/FE 跨笔记链接 |
 | `rename-pdf` | PyMuPDF title extraction → auto-rename PDFs | PyMuPDF 提取标题 → 自动重命名 PDF |
 | `markdown` | Build global DOI citation graph across .md files | 建立全目录 DOI 引用图谱 |
 | `crossref` | Crossref reference lookup (4 modes) | Crossref 参考文献查询（4种模式） |
@@ -122,6 +125,39 @@ vaultools pdf2md-local --cited_by_max 20
 ---
 
 ### `clean-images` — Image Garbage Collector / 图片垃圾回收
+
+| Arg | Type | Default | Description |
+| --- | --- | --- | --- |
+| `path_vault` | str | `C:\Vault` | Vault root to scan for .md files |
+| `path_images` | str | `C:\Vault\IMAGE` | Image directory to check |
+| `path_trash` | str | `C:\Vault\TRASH\Image` | Destination for unreferenced images |
+
+Scans all .md files in the vault, builds a set of referenced image filenames, compares with files in `IMAGE/`, moves unreferenced images to `TRASH/Image/`.
+
+```bash
+vaultools clean-images
+```
+
+---
+
+### `reconcile` — Reconcile PA/PT/FE Links / PA/PT/FE 链接审计
+
+| Arg | Type | Default | Description |
+| --- | --- | --- | --- |
+| `path_vault` | str | **Required** | Vault root to scan |
+
+Scans all .md files in the vault, reads `paper-analyze`, `paper-translate`, `figure-extractor` frontmatter wikilinks, resolves them to the actual target file content, compares H1 headings with link display text, cleans PA filename prefixes. Reports:
+- **Broken links** — target file doesn't exist
+- **Mismatched display** — wikilink display text ≠ target H1
+- **Duplicates** — same target referenced multiple times across notes
+
+```bash
+vaultools reconcile C:\Vault
+```
+
+> **Use after bulk MATCH operations** to verify all PA/PT/FE links resolve correctly.
+
+---
 
 | Arg | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -392,7 +428,9 @@ MIT
 
 **作者：** Li Kan <lik1453529@163.com>
 
-# Obsidian-Paper-Tools 2.3 — 卢布林合并
+# Obsidian-Paper-Tools 3.0 — 织命者卡洛斯
+
+> **织命者卡洛斯 (Kairos)** — 太古双首龙，左首回忆过去（match 追溯引用链——获取论文引用的 DOI），右首望向未来（cited-by 顺流而下——谁引用了这篇论文？），却双双盲于此刻——而此刻正是 reconcile 必须跨越的裂隙。Kairos 在古希腊语中意为"关键时刻"。
 
 > Obsidian。Our Vault。🔗 双向链接。🧠 关系图谱。📂 开放格式。
 > 我们的科研之道。
@@ -451,7 +489,8 @@ pip install .
 | --- | --- | --- |
 | `pdf2md` | MinerU PDF 批处理 → Markdown + DOI 增强 | MinerU PDF batch → Markdown + DOI enrichment |
 | `pdf2md-local` | pdfplumber 本地 PDF → Markdown（无需上传） | pdfplumber offline PDF → Markdown (no cloud) |
-| `clean-images` | 清理 IMAGE/ 中未被引用的图片文件 | Remove unreferenced images from IMAGE/ dir |
+| `clean-images` | 清理 IMAGE/ 中未被引用的图片 | Remove unreferenced images from IMAGE/ dir |
+| `reconcile` | 审计并修复 PA/PT/FE 跨笔记链接 | Audit PA/PT/FE frontmatter links → content |
 | `rename-pdf` | PyMuPDF 提取标题 → 自动重命名 PDF | PyMuPDF title extraction → auto-rename PDFs |
 | `markdown` | 建立全目录 DOI 引用图谱 | Build global DOI citation graph across .md files |
 | `crossref` | Crossref 参考文献查询（4种模式） | Crossref reference lookup (4 modes) |
@@ -776,41 +815,38 @@ MIT
 
 ## 增量对比 (vs v2.3)
 
-| 维度 | v2.3 | v2.3 |
+| 维度 | v2.3 | v3.0 |
 | --- | --- | --- |
-| **新增文件** | — | — |
-| **移除文件** | — | — |
-| **cli.py** | `pdf2md` / `pdf2md-local` 两个独立 case；`_cmd_remove_doi` 先判未匹配再循环输出 | 合并为 `case 'pdf2md' \| 'pdf2md-local'`（`getattr(args,'path_zip',None)`，`local=args.command=='pdf2md-local'`）；remove_doi 改为循环输出后再补「未找到匹配」；docstring 精简 |
-| **config.py** | 含 `CROSSREF_CACHE` 常量；docstring 5 行 | 删除 `CROSSREF_CACHE`（缓存改为函数参数传递）；docstring 精简为 1 行 |
-| **README.md** | 目录树 EN/ZH 两处残留 `clean_cache.py`；末尾含「增量对比 (vs v2.2)」整章 | 两处目录树删除 `clean_cache.py` 残留；删除 vs v2.2 整章为本次对比腾位 |
-| **commands/archive.py** | `_replace_img` 独立函数 + `counter` 列表；`link_map` 列表；`_find_parent` while p!=p.parent；`_try_copy` 先返回 hardlinked | 闭包 `_repl` + `nonlocal count` 内联；`link_config` 字典（PA/PT label）；`_find_parent` while True + 提前 return；`_try_copy` 先返回 copied；`dst_images` 提升至分支外；图片修复改 `if not (...) : continue` 卫语句 |
-| **commands/cited_by.py** | 本地 `_wikilink_doi`（split_wikilink）；`_collect_existing_dois`；`doi_wikilink` 写 cited_by | 改用 `core.refs.wikilink_doi`；改名 `_collect_existing`；`make_wikilink(process_doi(d)[0])`；`run_cited_by` 用 `not resolved.exists()` 统一判空 |
-| **commands/clean_images.py** | `PurePosixPath` + `threading.Lock` 进度；`_extract_local_names` 后置归一化 | 改 `os.path.basename`；删 Lock，`enumerate(as_completed)` 计进度；归一化提前；docstring 精简 |
-| **commands/crossref.py** | 模块级全局 `_cache = load_cache()`；本地 `_DASH_TABLE`；`_get_file_title` 独立函数；各 handler 无 cache 参数 | 缓存改为参数贯穿（`handle_input`/`process_file`/`_handle_*` 均收 `cache`）；复用 `core.doi.UNICODE_DASH_TABLE`；删 `_get_file_title`；`handle_input` 返回 bool；`_get_main_doi` 委托 `get_main_doi` |
-| **commands/markdown_graph.py** | `_parse_cited_by_entry` 手写 regex；`_update_doi_map` 返回元组；`_resolve_cited_by` 独立去重 | 复用 `wikilink_doi`；`_update_doi_map` 返回 None，`_rebuild_reference_list` 内联 used_name/is_special；`_resolve_cited_by` 复用 `_rebuild_reference_list`；`_resolve_self_doi` 改 `.partition('|')` |
-| **commands/match.py** | pt/pa/fe 各标量计数器；`_match_prop` 先查 existing 再查 path | 统计改嵌套 dict `stats`；`_match_prop` 先查 path 再判 existing；`_extract_doi_set` 简化；docstring 精简 |
-| **commands/pdf2md.py** | 6 个辅助函数：`read_text_file`/`read_json_file`/`_get_main_doi`/`_extract_dois_from_md`/`_pdf_worker`/`_detect_heading`；`doi_wikilink` | 全部内联（try/except 读 token/JSON/MD；lambda 提取 DOI；`_merge_paragraphs` while 条件重写）；改用 `core.doi.get_main_doi` 与 `make_wikilink`；docstring 精简 |
-| **commands/remove_doi.py** | docstring 2 行 | docstring 精简为 1 行（仅此差异） |
-| **commands/rename_pdf.py** | `ILLEGAL_CHARS`/`STATUS_SET` 局部；`_strip_author_suffix` 独立函数；`_is_title_junk` 多分支 | `str.maketrans` 内联；`STATUS_SET` 提升为模块级；后缀剥离内联进 `_clean_title`；`_is_title_junk` 合并条件；`KEYWORDS_SKIP` 常量；docstring 精简 |
-| **commands/trash.py** | 纯子目录归档（21 行），无图片逻辑 | 新增图片 GC 集成（88 行）：`_scan_referenced`（复用 `clean_images._scan_one`）、`_trash_unreferenced`、`_extract_entry`、`_restore_missing`（从 `DEFAULT_ZIP_PATH` 的 zip 恢复缺失图）；`run_trash` 先扫全库→冗余图移入 `TRASH/Image`→从 zip 恢复缺失 |
-| **commands/__init__.py** | docstring 10 行逐模块说明 | 精简为 2 行模块总述 |
-| **core/crossref_api.py** | `cache = {} if cache is None else cache`；`fetch_references` 顺带缓存 `issued:` 年份；`get_cited_by_pubmed` 缓存命中走 `_finalize` | `cache = cache or {}`；删 issued 顺带缓存（供独立 `get_issued_year` 请求）；`get_cited_by_pubmed` 缓存命中提前 return |
-| **core/doi.py** | `PATTERN_DOI_SPLICE` 用 `\s`；`UNICODE_DASH_TABLE` 4 字符；含 `doi_wikilink` | `[ \t]` 限定空格；加 `\u2015` 第 5 字符；**新增 `get_main_doi()`**（自 pdf2md 上收）；删除 `doi_wikilink` |
-| **core/frontmatter.py** | `for enc in ('utf-8','gbk')` 循环解码 | 改 try/except 嵌套（utf-8→gbk→replace）；docstring 精简 |
-| **core/markdown_utils.py** | `_fix_img` 先 `is_local` 赋值再返回 | 内联 `is_local` 于 return 表达式；docstring 精简 |
-| **core/obsidian_path.py** | `_fuzzy_search` 仅 SequenceMatcher；`resolve_input_path` 多级 if 逐条返回 | `_fuzzy_search` 先精确匹配 stem 再 fuzzy；candidates 改为 for 循环返回 |
-| **core/refs.py** | `build_existing_dois` 循环；`process_existing_references` 双分支；无 wikilink_doi | 集合推导式；`process_existing_references` 统一 key 去重（wikilink/裸文本）；**新增 `wikilink_doi()`**（自 cited_by 上收） |
-| **core/__init__.py** | docstring 6 行逐模块说明 | 精简为 1 行模块总述 |
+| **新增文件** | — | `commands/reconcile.py`（新增 `reconcile` 命令，约 284 行） |
+| **移除文件** | — | —（*.py / *.toml / *.md 范围内无移除） |
+| **cli.py** | 117 行 | 122 行 · 新增 `reconcile` 子命令（`--dry-run` 默认开启 / `--force`）并导入 `run_reconcile`；docstring 精简 |
+| **config.py** | 11 行 | 11 行 · docstring 改为提及 PENDING Clippings，移除 Crossref cache |
+| **pyproject.toml** | 21 行 | 21 行 · description 新增 PA/PT/FE reconcile，移除 image GC / citation graph |
+| **commands/__init__.py** | 3 行 | 2 行 · docstring 精简为单行并加入 reconcile |
+| **commands/archive.py** | 186 行 | 132 行 · 删除 `PATTERN_IMG` / `_fix_image_paths` 图片复制与路径改写逻辑及 `DEFAULT_IMAGE_PATH` 依赖；`_find_parent` 改单循环；结尾提示改为「归档完成」 |
+| **commands/cited_by.py** | 108 行 | 92 行 · 删除本地 `_collect_existing`，改用 `core.frontmatter.build_doi_set`；目录输入自动下钻 `Clippings`；`glob` → `rglob` |
+| **commands/clean_images.py** | 70 行 | 70 行 · 仅 docstring 精简 |
+| **commands/crossref.py** | 298 行 | 296 行 · 新增 `_USAGE_MSG` 统一错误提示；`handle_input` 错误分支重构；retry 打印合并 |
+| **commands/markdown_graph.py** | 211 行 | 210 行 · `is_special` / `removed` 改内联表达式；打印标点修正 |
+| **commands/match.py** | 189 行 | 350 行 · 新增反向索引（chi/pa/fe_reverse）、H1 中文标题提取、SequenceMatcher 模糊匹配（阈值 0.7）、正文 DOI 匹配；`_match_pa` / `_match_fe` 取代通用 `_match_prop`；wikilink 支持 `[[stem|别名]]` |
+| **commands/pdf2md.py** | 636 行 | 614 行 · 删除本地 `_build_clippings_all_doi_set` 改用 `build_doi_set`；`extract_text` 递归改迭代栈；参考条目改列表推导 |
+| **commands/remove_doi.py** | 25 行 | 25 行 · 仅 docstring 精简 |
+| **commands/rename_pdf.py** | 229 行 | 232 行 · `_is_title_junk` 条件拆分；重命名成功后打印 `原名 -> 新名` |
+| **core/crossref_api.py** | 196 行 | 196 行 · `get_cited_by_pubmed` 缓存命中 / `_finalize` 内联、请求参数换行、links 列表推导；移除 esummary 异常分支多余 sleep |
+| **core/doi.py** | 110 行 | 110 行 · `PATTERN_DOI_REPAIR2` 的 `\s+` 改为 `[ \t]+` |
+| **core/frontmatter.py** | 59 行 | 89 行 · 正则兼容 CRLF（`\r?\n`）；多编码 `for...else` 解码；新增 `read_fm()` 与 `build_doi_set()` |
+| **core/markdown_utils.py** | 49 行 | 49 行 · 仅 docstring 精简 |
+| **core/refs.py** | 56 行 | 56 行 · 仅 docstring 精简 |
+| **core/__init__.py** | 2 行 | 2 行 · 仅 docstring 精简 |
+| **README.md** | 817 行 | 811 行 · EN/ZH 命令表新增 `reconcile` 行；新增 reconcile 章节与 clean-images 用法；删除 v2.3 末尾「增量对比 (vs v2.3)」整章 |
 
 ### 关键变化
 
-- **trash 命令扩展为图片 GC + 归档二合一**：`commands/trash.py` 从 21 行扩至 88 行，新增全库扫描（复用 `clean_images._scan_one`）→ 未引用图片移入 `TRASH/Image/` → 并从 `C:\Vault\ZIP` 的 zip 归档恢复缺失图片（`_restore_missing`），再执行原有子目录归档。
-- **缓存与 DOI 工具下沉复用**：`core/doi.py` 新增 `get_main_doi()`（pdf2md/crossref 共用）、删除 `doi_wikilink`；`core/refs.py` 新增 `wikilink_doi()`（cited_by/markdown_graph 共用）；pdf2md 中 6 个辅助函数全部内联删除。
-- **crossref 去掉模块级全局 `_cache`**：缓存对象改为函数参数贯穿 `handle_input`→`process_file`/`_handle_*`，交互循环 `run_crossref_interactive` 每轮 `load_cache`/`save_cache`。
-- **Crossref 缓存不再顺带写 `issued:` 年份**：`fetch_references` 移除缓存首发年份逻辑，`get_issued_year` 独立请求缓存；`get_cited_by_pubmed` 缓存命中提前返回。
-- **config.py 删除 `CROSSREF_CACHE` 常量**：硬编码缓存路径移除，随新缓存参数化设计。
-- **cli.py 合并 pdf2md 双分支**：`pdf2md` / `pdf2md-local` 合并为单一 case，`local` 由子命令名判定，`path_zip` 用 `getattr` 兜底。
-- **README 清理历史残留**：EN/ZH 项目结构树删除 `clean_cache.py`（v2.3 遗留引用）；删除「增量对比 (vs v2.2)」整章。
-- **docstring 全面精简**：21 个改动文件中 20 个 docstring 从多行缩为 1 行模块总述（`remove_doi.py` 仅 docstring 差异）。
-- **多处等价重构**：archive `_try_copy` 返回值顺序、`_find_parent` 循环改写、obsidian_path 精确匹配优先、frontmatter 解码改 try/except、doi `UNICODE_DASH_TABLE` 增 `\u2015`、`PATTERN_DOI_SPLICE` 限空格等。
-- **逐字一致**：`pyproject.toml` 与全部 10 个 `scripts/*.bat` 无任何改动；文件清单两版完全相同（无新增/无移除）。
+- **新增 `reconcile` 命令（commands/reconcile.py）**：跨 Vault 扫描 `Clippings` / `Claude` / `Chi`，利用 wikilink 反向索引判定 PA/PT/FE 文件的 keep / move / trash，默认 dry-run，`--force` 执行迁移；cli 暴露 `vaultools reconcile [--force]`。
+- **匹配系统升级（commands/match.py，189 → 350 行）**：新增 H1 中文标题别名、反向索引（由目标文件内嵌 wikilink 反查）、SequenceMatcher 模糊匹配（阈值 0.7）与正文 DOI 匹配；PA/FE 链接统一写入 `[[stem|中文标题]]`。
+- **DOI 集合提取下沉复用**：`core/frontmatter.py` 新增 `build_doi_set()` / `read_fm()`，cited_by 与 pdf2md 删除各自重复的 `_collect_existing` / `_build_clippings_all_doi_set`。
+- **archive 移除图片复制逻辑**：`_fix_image_paths` / `PATTERN_IMG` 全部删除，归档不再搬运图片，结尾提示由「请手动验证图片链接是否正确」改为「归档完成」。
+- **frontmatter 兼容性增强**：正则支持 CRLF，多编码解码改为 `for...else`（utf-8 → gbk → replace）。
+- **docstring 全面精简**：多数改动文件 docstring 缩为单行（remove_doi / clean_images / markdown_utils / refs / __init__ 等仅此差异）。
+- **完全一致（零差异）**：`commands/trash.py`、`core/obsidian_path.py`。
+- **scripts 目录重组（超出 .py/.toml/.md 范围）**：v2.3 平铺的 `scripts/*.bat` 迁入 `scripts/全栈/` 与 `scripts/库/` 两个子目录，并新增 `scripts/全栈/RECONCILE.bat`。

@@ -1,4 +1,4 @@
-"""/s: Purge erroneous DOI wikilinks from Obsidian markdown.
+"""/s: Purge erroneous DOI wikilinks.
 """
 from pathlib import Path
 

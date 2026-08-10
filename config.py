@@ -1,4 +1,4 @@
-"""/s: Global path & API token configuration — MinerU API, Crossref cache, PubMed, IMAGE store.
+"""/s: Path & API config — MinerU, Crossref, PubMed, IMAGE store, PENDING Clippings.
 """
 from pathlib import Path
 
