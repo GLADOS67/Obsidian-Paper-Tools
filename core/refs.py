@@ -1,8 +1,96 @@
-"""/s: Wikilink reference utilities.
-"""
-from typing import Iterable, List, Optional, Tuple
+"""/s: Wikilink reference utilities for DOI citation lists."""
+
+import re
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from core.doi import PATTERN_DOI, is_plausible_doi, process_doi
+
+_CANONICAL_MAP = {
+    '\u2010': '-', '\u2011': '-', '\u2012': '-', '\u2013': '-',
+    '\u2014': '-', '\u2015': '-', '\u2212': '-',
+    '\u2018': '\u201c', '\u2019': '\u201d', '\u201A': '\u201c',
+    '\u201B': '\u201c', '\u201C': '\u201c', '\u201D': '\u201d',
+    '\u201E': '\u201c', '\u201F': '\u201d', '\u2039': '\u201c',
+    '\u203A': '\u201d',
+}
+_CANONICAL_TABLE = str.maketrans(_CANONICAL_MAP)
+
+def canonicalize_stem(stem: str) -> str:
+    return stem.translate(_CANONICAL_TABLE).replace('\u2026', '...')
+
+
+WIKILINK_RE = re.compile(r'\[\[([^|]+)\|([^]]+)\]\]')
+LINK_TARGET_RE = re.compile(r'\[\[\s*([^|\]]+)')
+H1_WIKILINK_RE = re.compile(r'^#\s*\[\[([^|]+)\|([^]]+)\]\]')
+_PA_PREFIX_RE = re.compile(r'^\d+_?\s*')
+
+
+def parse_h1_wikilink(text: str) -> Optional[Tuple[str, str]]:
+    for line in text.split('\n'):
+        m = H1_WIKILINK_RE.match(line.strip())
+        if m:
+            return m.group(1).strip(), m.group(2).strip()
+    return None
+
+
+def extract_wikilink_name(value) -> Optional[str]:
+    if not value:
+        return None
+    m = WIKILINK_RE.search(str(value).replace('\n', ' '))
+    return m.group(1).strip() if m else None
+
+
+def first_ref_target(ref_list: list) -> Optional[str]:
+    if not ref_list:
+        return None
+    ref0 = ref_list[0].replace('\n', ' ').strip() if isinstance(ref_list[0], str) else str(ref_list[0]).replace('\n', ' ').strip()
+    m = WIKILINK_RE.search(ref0)
+    return m.group(1).strip() if m else None
+
+
+def extract_doi_set(ref_list: list) -> set:
+    if not ref_list:
+        return set()
+    result = set()
+    for ref in ref_list:
+        if not isinstance(ref, str):
+            continue
+        match = WIKILINK_RE.search(ref.replace('\n', ' '))
+        source = match.group(2) if match else ref
+        result.update(d for d in PATTERN_DOI.findall(source))
+    return result
+
+
+_STEM_PREFIX_RE = re.compile(r'^\d+_?\s*')
+
+def norm_stems(stem: str) -> set:
+    normalized = canonicalize_stem(stem)
+    variants = {stem, normalized}
+    for v in list(variants):
+        variants.add(v.replace(' ', '_'))
+        variants.add(v.replace('_', ' '))
+    stripped = _STEM_PREFIX_RE.sub('', stem)
+    if stripped and stripped != stem:
+        variants.add(stripped)
+        for v in list(variants):
+            sv = _STEM_PREFIX_RE.sub('', v)
+            if sv and sv != v:
+                variants.add(sv)
+    return variants
+
+
+def pa_stem_variants(pa_stem: str) -> list:
+    variants = [pa_stem]
+    stripped = _PA_PREFIX_RE.sub('', pa_stem)
+    if stripped and stripped != pa_stem:
+        variants.append(stripped)
+    for v in list(variants):
+        if '_' in v:
+            variants.append(v.replace('_', ' '))
+        elif ' ' in v:
+            variants.append(v.replace(' ', '_'))
+    seen = set()
+    return [x for x in variants if not (x in seen or seen.add(x))]
 
 
 def split_wikilink(ref: str) -> Optional[Tuple[str, str]]:

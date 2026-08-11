@@ -1,5 +1,5 @@
-"""/s: Image garbage collector — scan for unreferenced images, move to TRASH.
-"""
+"""/s: Remove unreferenced images from an Obsidian Vault."""
+
 import os
 import re
 import shutil

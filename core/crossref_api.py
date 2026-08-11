@@ -1,8 +1,10 @@
-"""/s: Crossref REST API & PubMed E-utilities with JSON caching.
-"""
+"""/s: Crossref API + PubMed E-utilities client for DOI references and cited-by."""
+
 import json
 import random
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -44,10 +46,16 @@ def _api_get(url: str, params: dict = None, timeout: int = 10) -> Optional[dict]
         return None
 
 
-def get_doi_from_citation(citation_text: str, cache: dict = None) -> Optional[Tuple[str, str]]:
+def get_doi_from_citation(citation_text: str, cache: dict = None,
+                         lock: threading.Lock = None) -> Optional[Tuple[str, str]]:
     cache = cache or {}
     key = f'cite:{citation_text.strip()}'
-    if key in cache:
+    if lock:
+        with lock:
+            if key in cache:
+                val = cache[key]
+                return (val[0], val[1]) if isinstance(val, (tuple, list)) and len(val) == 2 else None
+    elif key in cache:
         val = cache[key]
         return (val[0], val[1]) if isinstance(val, (tuple, list)) and len(val) == 2 else None
     data = _api_get(CROSSREF_API_BASE, params={
@@ -66,7 +74,11 @@ def get_doi_from_citation(citation_text: str, cache: dict = None) -> Optional[Tu
     if not doi:
         print(f'Crossref结果无DOI: {title[:80]}')
     result = (doi, title) if doi else None
-    cache[key] = result
+    if lock:
+        with lock:
+            cache[key] = result
+    else:
+        cache[key] = result
     return result
 
 
@@ -103,25 +115,39 @@ def fetch_references(doi: str, cache: dict = None) -> List[Dict]:
     msg = data.get('message', {})
     cache[citedby_key] = msg.get('is-referenced-by-count', 0)
     cache[f'issued:{doi}'] = _extract_issued_year(msg)
-    refs = []
+
+    refs_with_doi = []
+    refs_missing = []
     for ref in msg.get('reference', []):
         ref_doi = ref.get('DOI')
-        ref_text = ref.get('unstructured', '')
-        if not ref_doi and ref_text:
-            print(f'补全缺失DOI: {ref_text[:50]}...')
-            result = get_doi_from_citation(ref_text, cache)
-            ref_doi = result[0] if result else None
-            if ref_doi:
-                print(f'补全成功: {ref_doi}')
         if ref_doi:
-            refs.append({
-                'text': ref_text,
-                'doi': process_doi(ref_doi)[0],
-                'title': ref.get('article-title') or ref.get('volume-title', ''),
-            })
-    print(f'拉取到 {len(refs)} 条参考文献')
-    cache[refs_key] = refs
-    return refs
+            refs_with_doi.append({'text': ref.get('unstructured', ''),
+                                  'doi': process_doi(ref_doi)[0],
+                                  'title': ref.get('article-title') or ref.get('volume-title', '')})
+        elif ref.get('unstructured', ''):
+            refs_missing.append(ref)
+
+    if refs_missing:
+        lock = threading.Lock()
+        print(f'并行补全 {len(refs_missing)} 个缺失DOI...')
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            futures = {ex.submit(get_doi_from_citation, r.get('unstructured', ''), cache, lock): r
+                       for r in refs_missing}
+            for fut in as_completed(futures):
+                ref = futures[fut]
+                result = fut.result()
+                ref_doi = result[0] if result else None
+                if ref_doi:
+                    print(f'补全成功: {ref_doi}')
+                    refs_with_doi.append({
+                        'text': ref.get('unstructured', ''),
+                        'doi': process_doi(ref_doi)[0],
+                        'title': ref.get('article-title') or ref.get('volume-title', ''),
+                    })
+
+    print(f'拉取到 {len(refs_with_doi)} 条参考文献')
+    cache[refs_key] = refs_with_doi
+    return refs_with_doi
 
 
 def get_cited_by_pubmed(doi: str, cache: dict = None,

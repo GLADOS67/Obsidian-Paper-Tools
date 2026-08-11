@@ -1,5 +1,5 @@
-"""/s: Path & API config — MinerU, Crossref, PubMed, IMAGE store, PENDING Clippings.
-"""
+"""/s: Global path constants: MinerU token, Crossref cache, Obsidian Vault."""
+
 from pathlib import Path
 
 MINERU_TOKEN = Path(r'C:\ResearchFront\DATA\API\MinerU.txt')

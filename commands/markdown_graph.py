@@ -1,5 +1,7 @@
-"""/s: Obsidian wikilink DOI citation graph builder.
-"""
+"""/s: Build global DOI citation graph across Obsidian Vault .md files."""
+
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -132,22 +134,15 @@ def _process_unhandled_file(file: Path, content: str, fm: Dict, rest: str,
     return fm, rest
 
 
-def run_markdown_graph(directory: str) -> None:
-    target = Path(directory)
-    md_files = sorted(target.rglob('*.md'))
-    print(f'找到 {len(md_files)} 个MD文件，开始处理...\n')
-
-    unique_map: Dict[str, DoiEntry] = {}
-    cited_by_map: Dict[str, Tuple[str, List[str]]] = {}
-    files_data: List[Tuple[Path, Dict, str]] = []
-
-    for file in md_files:
-        try:
-            content = normalize_unicode_dashes(file.read_text(encoding='utf-8'))
-        except Exception as e:
-            print(f'  警告：读取文件 {file.name} 失败，跳过 → {str(e)}')
-            continue
-        fm, rest = parse_frontmatter_str(content)
+def _process_one_file(file: Path, unique_map: Dict[str, DoiEntry],
+                      cited_by_map: Dict[str, Tuple[str, List[str]]], lock: threading.Lock):
+    try:
+        content = normalize_unicode_dashes(file.read_text(encoding='utf-8'))
+    except Exception as e:
+        print(f'  警告：读取文件 {file.name} 失败，跳过 → {str(e)}')
+        return None
+    fm, rest = parse_frontmatter_str(content)
+    with lock:
         for cb_item in fm.get('cited_by', []):
             parsed = _parse_cited_by_entry(cb_item)
             if parsed is None:
@@ -169,7 +164,25 @@ def run_markdown_graph(directory: str) -> None:
             print(f'处理未处理文件：{file.name}')
             fm, rest = _process_unhandled_file(file, content, fm, rest, unique_map)
             print(f'  ✅ {file.name} 处理完成')
-        files_data.append((file, fm, rest))
+    return (file, fm, rest)
+
+
+def run_markdown_graph(directory: str) -> None:
+    target = Path(directory)
+    md_files = sorted(target.rglob('*.md'))
+    print(f'找到 {len(md_files)} 个MD文件，开始处理...\n')
+
+    unique_map: Dict[str, DoiEntry] = {}
+    cited_by_map: Dict[str, Tuple[str, List[str]]] = {}
+    files_data: List[Tuple[Path, Dict, str]] = []
+    lock = threading.Lock()
+
+    with ThreadPoolExecutor() as ex:
+        futures = {ex.submit(_process_one_file, f, unique_map, cited_by_map, lock): f for f in md_files}
+        for fut in as_completed(futures):
+            result = fut.result()
+            if result:
+                files_data.append(result)
 
     print(f'\n已收集到 {len(unique_map)} 个全局DOI标题映射')
     print('\n开始计算引用关系和引用情况并保存文件...')

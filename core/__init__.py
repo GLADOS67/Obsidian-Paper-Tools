@@ -1,2 +1,24 @@
-"""/s: Core — crossref_api (Crossref+PubMed API), doi, frontmatter, markdown_utils, obsidian_path, refs.
-"""
+"""/s: core package for Obsidian Vault tools: crossref_api, doi, frontmatter, markdown_utils, obsidian_path, refs. Crossref API, PubMed E-utilities, DOI, MinerU."""
+
+import os
+import shutil
+from pathlib import Path
+
+_VAULT_DIRS = {'Clippings', 'Claude', 'Chi'}
+_VAULT_SKIP = {'.obsidian', 'TRASH', 'IMAGE', 'PDF', 'ZIP'}
+
+
+def is_vault_dir(p: Path) -> bool:
+    if not p.is_dir() or p.name.startswith('.') or p.name in _VAULT_SKIP:
+        return False
+    return any((p / d).is_dir() for d in _VAULT_DIRS)
+
+
+def try_copy(src: Path, dst: Path) -> bool:
+    if not src.exists() or dst.exists():
+        return False
+    try:
+        os.link(src, dst)
+    except OSError:
+        shutil.copy2(src, dst)
+    return True

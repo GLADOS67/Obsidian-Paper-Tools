@@ -1,5 +1,5 @@
-"""/s: MinerU + pdfplumber PDF-to-Markdown with Crossref/PubMed enrichment.
-"""
+"""/s: MinerU PDF batch-to-Markdown pipeline with DOI / Crossref / PubMed enrichment."""
+
 import json
 import multiprocessing
 import os
@@ -24,14 +24,29 @@ from core.doi import (PATTERN_DOI, find_plausible_dois, get_main_doi, make_wikil
 from core.frontmatter import (build_doi_set, cited_by_fresh, dump_frontmatter,
                                parse_frontmatter_str)
 from core.markdown_utils import clean_markdown_body
-from core.refs import build_existing_dois, new_doi_wikilinks, process_existing_references
-from config import DEFAULT_IMAGE_PATH
+from core.refs import build_existing_dois, canonicalize_stem, new_doi_wikilinks, process_existing_references
+from core import try_copy, is_vault_dir
+from config import DEFAULT_IMAGE_PATH, OBSIDIAN_ROOT
 
 
 URL_PATTERN = re.compile(
     r'https?://[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)',
     re.IGNORECASE
 )
+
+
+def _build_clippings_index(vault_root: Path) -> dict:
+    index = {}
+    for vault_dir in sorted(vault_root.iterdir()):
+        if not is_vault_dir(vault_dir):
+            continue
+        clips = vault_dir / 'Clippings'
+        if not clips.is_dir():
+            continue
+        for md in clips.rglob('*.md'):
+            if md.stem not in index:
+                index[md.stem] = md
+    return index
 
 
 def extract_text(obj):
@@ -147,6 +162,8 @@ def _extract_pdf_dois(pdf_path):
         pdf_text = result_queue.get() if not result_queue.empty() else None
         p.close()
         if pdf_text:
+            # 去除换行使跨行断开的DOI能被PATTERN_DOI_SPLICE拼接修复
+            pdf_text = pdf_text.replace('\n', ' ')
             return set(find_plausible_dois(repair_doi_text(pdf_text)))
     except Exception as e:
         print(f'从PDF提取DOI失败 {pdf_path.name}: {e}')
@@ -194,23 +211,19 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_ca
         print(f'读取MD文件失败 {md_dst}: {e}')
         return False
 
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        f_md = ex.submit(lambda c: set(find_plausible_dois(repair_doi_text(c))), content)
-        f_json = ex.submit(_extract_json_data, json_src)
-        f_pdf = ex.submit(_extract_pdf_dois, pdf_path)
-        dois_md = f_md.result() or set()
-        json_dois, urls = f_json.result() or (set(), [])
-        dois_pdf = f_pdf.result() or set()
+    dois_md = set(find_plausible_dois(repair_doi_text(content)))
+    json_dois, urls = _extract_json_data(json_src)
+    dois_pdf = _extract_pdf_dois(pdf_path) if pdf_path else set()
 
     all_dois = dois_md | json_dois | dois_pdf
-    content = _replace_urls(content, urls)
+    if urls:
+        content = _replace_urls(content, urls)
     fm, rest = parse_frontmatter_str(content)
     main_doi = get_main_doi(fm, content, all_dois)
     if main_doi is None and enable_api_refs and not all_dois:
         result = get_doi_from_citation(fm.get('title', md_dst.stem), crossref_cache)
         main_doi = process_doi(result[0])[0] if result else None
-        method = '确认主DOI' if result else '无结果'
-        print(f'Crossref标题回退{method}: {fm.get("title", md_dst.stem)}')
+        print(f'Crossref标题回退{"确认主DOI" if result else "无结果"}: {fm.get("title", md_dst.stem)}')
 
     if enable_cited_by and main_doi:
         if clippings_doi_set is None:
@@ -242,8 +255,7 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_ca
         rest = re.sub(r'\]\(images/', f']({images_dir.resolve().as_posix()}/', rest)
     fm.pop('特殊引用数', None)
     try:
-        with open(md_dst, 'w', encoding='utf-8') as f:
-            f.write(dump_frontmatter(fm, rest))
+        md_dst.write_text(dump_frontmatter(fm, rest), encoding='utf-8')
     except Exception as e:
         print(f'更新MD文件失败 {md_dst}: {e}')
         return False
@@ -268,15 +280,15 @@ def _download_zip(zip_url, zip_path, file_name, idx):
 def _poll_batch_completion(batch_id, token, max_wait=1800, expected_count=None):
     url = f'https://mineru.net/api/v4/extract-results/batch/{batch_id}'
     headers = {'Authorization': f'Bearer {token}'}
-    TERMINAL = {'done', 'failed'}
-    files = []
     start = time.time()
     while time.time() - start < max_wait:
         try:
             resp = requests.get(url, headers=headers, timeout=30)
-        except Exception as e:
-            print(f'查询请求异常: {str(e)}')
-            return None
+        except Exception:
+            seconds = time.time() - start
+            print(f'查询请求异常({seconds:.0f}s)，等待重试')
+            time.sleep(10)
+            continue
         if resp.status_code != 200:
             print(f'查询失败，状态码: {resp.status_code}')
             return None
@@ -288,13 +300,12 @@ def _poll_batch_completion(batch_id, token, max_wait=1800, expected_count=None):
         if not files:
             print('批次无文件数据')
             return None
-        states = [f['state'] for f in files]
-        done_count = states.count('done')
-        terminal_count = sum(1 for s in states if s in TERMINAL)
-        target = expected_count if expected_count is not None else len(files)
-        print(f'目前状态: {states} | 完成数: {done_count}/{len(files)} | 目标: {target}')
-        if terminal_count >= target:
-            return [f for f in files if f['state'] == 'done']
+        done = [f for f in files if f['state'] == 'done']
+        failed = sum(1 for f in files if f['state'] == 'failed')
+        target = expected_count or len(files)
+        print(f'完成: {len(done)}/{len(files)}  失败: {failed}  目标: {target}')
+        if len(done) + failed >= target:
+            return done
         time.sleep(10)
     print('轮询批次超时，返回已完成文件')
     return [f for f in files if f['state'] == 'done']
@@ -313,13 +324,6 @@ def _find_extracted_files(temp_dir):
             break
     return md_src, img_src, json_src
 
-
-def _mark_pdf_done(pdf_path):
-    time.sleep(0.5)
-    try:
-        pdf_path.rename(pdf_path.parent / f'完成_{pdf_path.name}')
-    except Exception:
-        shutil.move(str(pdf_path), str(pdf_path.parent.parent / 'TRASH' / pdf_path.name))
 
 _SENTENCE_END = '.。!！?？:：;；)）]】-—'
 
@@ -362,11 +366,11 @@ def _merge_paragraphs(text):
             continue
         while i + 1 < len(lines):
             nxt = lines[i + 1].strip()
-            if not nxt or (line[-1] in _SENTENCE_END
-                           and not line.endswith('-')
-                           and not nxt[0].islower()):
+            if not nxt:
                 break
-            line = line[:-1] + nxt if line.endswith('-') else f'{line} {nxt}'
+            if line[-1] in _SENTENCE_END and not line.endswith('-') and not nxt[0].islower():
+                break
+            line = (line[:-1] + nxt) if line.endswith('-') else f'{line} {nxt}'
             i += 1
         result.append(line)
         i += 1
@@ -408,7 +412,7 @@ def convert_pdf_to_markdown(pdf_path):
         return ''
 
 
-def _run_local_batch(pdf_files, path_md0, pp, enable_api_refs,
+def _run_local_batch(pdf_files, path_md0, enable_api_refs,
                      crossref_cache, enable_cited_by, cited_by_max,
                      images_dir, clippings_doi_set, ref_max_age=15):
     pm = Path(path_md0)
@@ -420,7 +424,7 @@ def _run_local_batch(pdf_files, path_md0, pp, enable_api_refs,
         if not md_content:
             print('  转换失败，跳过')
             return None
-        md_dst = pm / f'{pdf_path.stem}.md'
+        md_dst = pm / f'{canonicalize_stem(pdf_path.stem)}.md'
         fm = {'title': pdf_path.stem, 'pdf_path': str(pdf_path)}
         try:
             md_dst.write_text(dump_frontmatter(fm, md_content), encoding='utf-8')
@@ -434,7 +438,11 @@ def _run_local_batch(pdf_files, path_md0, pp, enable_api_refs,
                 images_dir, clippings_doi_set, ref_max_age,
             )
         if success:
-            _mark_pdf_done(pdf_path)
+            time.sleep(0.5)
+            try:
+                pdf_path.rename(pdf_path.parent / f'完成_{pdf_path.name}')
+            except Exception:
+                shutil.move(str(pdf_path), str(pdf_path.parent.parent / 'TRASH' / pdf_path.name))
         return md_dst.name
 
     with ThreadPoolExecutor(max_workers=min(4, len(pdf_files))) as ex:
@@ -483,7 +491,7 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
             md_src, img_src, json_src = _find_extracted_files(temp_dir)
             md_dst = None
             if md_src:
-                md_dst = path_md0 / f'{Path(file_name).stem}.md'
+                md_dst = path_md0 / f'{canonicalize_stem(Path(file_name).stem)}.md'
                 shutil.move(str(md_src), str(md_dst))
             if img_src:
                 for img_file in img_src.glob('*'):
@@ -496,7 +504,11 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
                 if _process_md_content(md_dst, json_src, pdf_file_path, enable_api_refs,
                                        crossref_cache, enable_cited_by, cited_by_max,
                                        images_output, clippings_doi_set, ref_max_age):
-                    _mark_pdf_done(pdf_file_path)
+                    time.sleep(0.5)
+                    try:
+                        pdf_file_path.rename(pdf_file_path.parent / f'完成_{pdf_file_path.name}')
+                    except Exception:
+                        shutil.move(str(pdf_file_path), str(pdf_file_path.parent.parent / 'TRASH' / pdf_file_path.name))
         except Exception as e:
             print(f'处理失败: {e}')
         finally:
@@ -527,14 +539,36 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
 
     pdf_files = sorted({f.absolute() for f in pp.rglob('*.pdf') if '完成' not in f.name})
     filtered = []
+    global_index = _build_clippings_index(OBSIDIAN_ROOT)
+    print(f'全库已索引: {len(global_index)} 个MD')
     for pdf_file in pdf_files:
         done_path = pdf_file.parent / f'完成_{pdf_file.name}'
         if done_path.exists():
-            print(f'已存在完成版本，移入TRASH: {pdf_file.name}')
-            try:
-                shutil.move(str(pdf_file), str(trash_dir / pdf_file.name))
-            except Exception as e:
-                print(f'移入TRASH失败: {e}')
+            md_path = global_index.get(pdf_file.stem)
+            if md_path and md_path.exists():
+                print(f'[A] 已完成: {pdf_file.name}')
+                if md_path.resolve() == (pm / f'{pdf_file.stem}.md').resolve():
+                    print(f'    MD已就位: {md_path}')
+                else:
+                    print(f'    发现跨vault MD: {md_path.parent.parent.parent.name}')
+                    dst = pm / f'{pdf_file.stem}.md'
+                    if try_copy(md_path, dst):
+                        print(f'    硬链接成功: {dst.name}')
+                    else:
+                        print(f'    硬链接失败(目标已存在)')
+                try:
+                    shutil.move(str(pdf_file), str(trash_dir / pdf_file.name))
+                    print(f'    PDF → TRASH')
+                except Exception as e:
+                    print(f'    PDF移入TRASH失败: {e}')
+            else:
+                print(f'[B] 无MD记录: {pdf_file.name}  重处理中')
+                filtered.append(pdf_file)
+                try:
+                    shutil.move(str(done_path), str(trash_dir / done_path.name))
+                    print(f'    完成标记 → TRASH')
+                except Exception as e:
+                    print(f'    完成标记移入TRASH失败: {e}')
         else:
             filtered.append(pdf_file)
     pdf_files = filtered
@@ -546,7 +580,7 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
 
     if local:
         clippings_doi_set = build_doi_set(pm) if enable_cited_by else None
-        _run_local_batch(pdf_files, path_md0, pp, enable_api_refs,
+        _run_local_batch(pdf_files, path_md0, enable_api_refs,
                         crossref_cache, enable_cited_by, cited_by_max,
                         images_dir, clippings_doi_set, ref_max_age)
         save_cache(crossref_cache)

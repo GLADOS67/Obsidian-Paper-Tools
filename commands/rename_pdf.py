@@ -1,8 +1,12 @@
-"""/s: PyMuPDF title extraction → auto-rename PDFs.
-"""
+"""/s: Extract paper titles with PyMuPDF to auto-rename PDFs in Obsidian Vault."""
+
 import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+import fitz
 
 from core.doi import SMART_QUOTE_TABLE
 
@@ -182,14 +186,38 @@ def _sanitize_filename(title):
     return title
 
 
+def _process_one_pdf(pdf_path: Path, names_taken: set, lock: threading.Lock) -> tuple:
+    title = None
+    try:
+        doc = fitz.open(pdf_path)
+        try:
+            title = _get_metadata_title(doc) or _get_first_page_title(doc)
+        finally:
+            doc.close()
+    except Exception as e:
+        return ('skip', pdf_path, str(e))
+    title = _clean_title(title) if title else ''
+    if not title or _is_title_junk(title):
+        return ('skip', pdf_path, '')
+
+    title = _sanitize_filename(title)
+    with lock:
+        names_taken.discard(pdf_path.stem)
+        name, c = title, 1
+        while name in names_taken:
+            c += 1
+            name = f"{title} ({c})"
+        names_taken.add(name)
+    new_path = pdf_path.with_name(name + '.pdf')
+    try:
+        os.rename(str(pdf_path), str(new_path))
+        return ('renamed', pdf_path, new_path.name)
+    except OSError as e:
+        return ('failed', pdf_path, str(e))
+
+
 def run_rename_pdf(directory):
     """Rename PDF files by extracted title."""
-    try:
-        import fitz
-    except ImportError:
-        print("PyMuPDF not installed. Run: pip install pymupdf")
-        return
-
     path = Path(directory)
     pdf_files = sorted(p for p in path.glob('*.pdf') if not p.name.startswith('完成_'))
     total = len(pdf_files)
@@ -199,33 +227,20 @@ def run_rename_pdf(directory):
 
     names_taken = {p.stem for p in pdf_files}
     renamed = skipped = 0
+    lock = threading.Lock()
 
-    for pdf_path in pdf_files:
-        doc = fitz.open(pdf_path)
-        try:
-            title = _get_metadata_title(doc) or _get_first_page_title(doc)
-        finally:
-            doc.close()
-        title = _clean_title(title) if title else ''
-        if not title or _is_title_junk(title):
-            skipped += 1
-            continue
-        title = _sanitize_filename(title)
-
-        names_taken.discard(pdf_path.stem)
-        name, c = title, 1
-        while name in names_taken:
-            name = f"{title} ({c})"
-            c += 1
-        names_taken.add(name)
-
-        new_path = pdf_path.with_name(name + '.pdf')
-        try:
-            os.rename(str(pdf_path), str(new_path))
-            renamed += 1
-            print(f'  {pdf_path.name} -> {new_path.name}')
-        except OSError as e:
-            print(f"  Rename failed: {pdf_path.name} -> {new_path.name} | {e}")
-            skipped += 1
+    with ThreadPoolExecutor() as ex:
+        futures = {ex.submit(_process_one_pdf, p, names_taken, lock): p for p in pdf_files}
+        for fut in as_completed(futures):
+            status, src, info = fut.result()
+            if status == 'renamed':
+                renamed += 1
+                print(f'  {src.name} -> {info}')
+            elif status == 'failed':
+                skipped += 1
+                print(f'  Rename failed: {src.name} -> {info}')
+            else:
+                skipped += 1
+                print(f'  Skip: {src.name} | {info}')
 
     print(f"Total: {total}  Renamed: {renamed}  Skipped: {skipped}")

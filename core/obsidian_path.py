@@ -1,5 +1,5 @@
-"""/s: Obsidian URI resolver with fuzzy glob fallback.
-"""
+"""/s: Obsidian URI / path resolution for Obsidian Vault notes."""
+
 import re
 import urllib.parse
 from difflib import SequenceMatcher

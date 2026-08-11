@@ -1,5 +1,5 @@
-"""/s: YAML frontmatter parser & dumper for Obsidian.
-"""
+"""/s: YAML frontmatter parse/dump for Obsidian Vault notes."""
+
 import re
 from datetime import datetime
 from pathlib import Path

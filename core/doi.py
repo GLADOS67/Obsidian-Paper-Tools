@@ -1,5 +1,5 @@
-"""/s: DOI regex, repair & canonicalization.
-"""
+"""/s: DOI regex, repair and canonicalization utilities."""
+
 import re
 from functools import lru_cache
 from typing import List, Optional, Tuple
@@ -19,7 +19,7 @@ PATTERN_DOI_REPAIR = re.compile(
     re.IGNORECASE
 )
 PATTERN_DOI_REPAIR2 = re.compile(
-    r'(10\.\d{4,9}/[-A-Za-z0-9._;()/:]+)([./])[ \t]+([-A-Za-z0-9]{2,}\.[-A-Za-z0-9._;()/:]+)',
+    r'(10\.\d{4,9}/[-A-Za-z0-9._;()/:]+)[ \t]*([./])[ \t]+([-A-Za-z0-9]{2,}\.[-A-Za-z0-9._;()/:]+)',
     re.IGNORECASE
 )
 PATTERN_TAIL_PARENS = re.compile(r'[)）].*')
@@ -31,11 +31,15 @@ _RE_URL_SPLIT = re.compile(r'https?://')
 _RE_ID_TAIL = re.compile(r'\.?\(?(?:PMID|PMCID):?\s*\d+\)?\.?$', re.IGNORECASE)
 _RE_YEAR_OR_DOTS_TAIL = re.compile(r'\(\d{4}\)\.?$|\.+$')
 
-UNICODE_DASH_TABLE = str.maketrans('\u2010\u2011\u2013\u2014\u2015', '-----')
+UNICODE_DASH_TABLE = str.maketrans('\u2010\u2011\u2012\u2013\u2014\u2015\u2212', '-------')
 PDF_ARTIFACTS = str.maketrans('', '', '\u200b\u200c\u200d\ufeff\u00ad\u200e\u200f\u2028\u2029')
 SMART_QUOTE_TABLE = str.maketrans({
-    '\u201c': '"', '\u201d': '"', '\u2018': "'", '\u2019': "'",
-    '\u2013': '-', '\u2014': '-',
+    '\u2018': '\u201c', '\u2019': '\u201d', '\u201a': '\u201c',
+    '\u201b': '\u201c', '\u201c': '\u201c', '\u201d': '\u201d',
+    '\u201e': '\u201c', '\u201f': '\u201d', '\u2039': '\u201c',
+    '\u203a': '\u201d',
+    '\u2010': '-', '\u2011': '-', '\u2012': '-', '\u2013': '-',
+    '\u2014': '-', '\u2015': '-', '\u2212': '-',
     '\u2026': '...',
 })
 
@@ -75,8 +79,28 @@ def extract_doi_from_frontmatter(fm: dict) -> str | None:
     return process_doi(m.group(0))[0] if (isinstance(doi_val, str) and (m := PATTERN_DOI.search(doi_val))) else None
 
 
+PATTERN_DOUBLE_DOI = re.compile(r'10\.\d{4,9}/.*10\.\d{4,9}/', re.IGNORECASE)
+PATTERN_EMBEDDED_DOI_LABEL = re.compile(r'\.doi[:\d]', re.IGNORECASE)
+PATTERN_STAT_OR_CI = re.compile(r'\d+\.\d+\(\d+\.\d+[-–]\d+\.\d+\)')
+PATTERN_REF_TAIL = re.compile(r'\d{1,3}\.[A-Z][a-z]{2,}')
+MAX_DOI_RAW_LEN = 200
+
+
 def is_plausible_doi(doi: str) -> bool:
-    return not PATTERN_PURE_ALPHA_SUFFIX.match(doi.strip())
+    doi = doi.strip()
+    if PATTERN_PURE_ALPHA_SUFFIX.match(doi):
+        return False
+    if len(doi) > MAX_DOI_RAW_LEN:
+        return False
+    if PATTERN_DOUBLE_DOI.search(doi):
+        return False
+    if PATTERN_EMBEDDED_DOI_LABEL.search(doi):
+        return False
+    if PATTERN_STAT_OR_CI.search(doi):
+        return False
+    if PATTERN_REF_TAIL.search(doi):
+        return False
+    return True
 
 
 def find_plausible_dois(text: str) -> List[str]:
@@ -95,10 +119,11 @@ def get_main_doi(fm: dict, content: str, all_dois: set = None) -> Optional[str]:
         return main
     if doi := doi_from_doi_line(content):
         return doi
-    if all_dois:
-        return process_doi(next(iter(all_dois)))[0]
+    # 正文中第一个出现的DOI = 论文自身DOI（出现在标题/URL区，早于参考文献）
     if dois := find_plausible_dois(content):
         return process_doi(dois[0])[0]
+    if all_dois:
+        return process_doi(next(iter(all_dois)))[0]
     return None
 
 

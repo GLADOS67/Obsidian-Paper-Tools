@@ -1,5 +1,5 @@
-"""/s: Obsidian-Paper-Tools CLI — MinerU, pdfplumber, Crossref API, PubMed, image GC, reconcile, PyMuPDF rename, cite graph.
-"""
+"""/s: CLI entry point for Obsidian Vault tools - MinerU, Crossref API, PubMed E-utilities, DOI."""
+
 import argparse
 
 from commands.pdf2md import run_pdf2md
@@ -13,6 +13,7 @@ from commands.cited_by import run_cited_by, run_cited_by_interactive
 from commands.rename_pdf import run_rename_pdf
 from commands.clean_images import run_clean_images
 from commands.reconcile import run_reconcile
+from commands.unify_symbols import run_unify_symbols
 
 
 def _add_api_args(parser, with_zip=True):
@@ -84,37 +85,36 @@ def main():
     p_rec.add_argument('--dry-run', action='store_true', default=True)
     p_rec.add_argument('--force', action='store_true')
 
+    p_unify = sub.add_parser('unify-symbols', help='规范化文件名和wikilink中的Unicode符号')
+    p_unify.add_argument('--vault', default=r'C:\Vault')
+    p_unify.add_argument('--dry-run', action='store_true', default=True)
+    p_unify.add_argument('--force', action='store_true')
+
     args = parser.parse_args()
     if args.command is None:
         parser.print_help()
         return
 
-    match args.command:
-        case 'pdf2md' | 'pdf2md-local':
-            run_pdf2md(args.path_pdf, getattr(args, 'path_zip', None), args.path_md0,
-                       args.enable_api_references, args.enable_cited_by, args.cited_by_max,
-                       local=args.command == 'pdf2md-local', path_images=args.path_images,
-                       ref_max_age=args.ref_max_age)
-        case 'markdown':
-            run_markdown_graph(args.path)
-        case 'crossref':
-            crossref_handle(args.input) if args.input else run_crossref_interactive()
-        case 'match':
-            run_match(args.base_dir, args.dry_run, args.threshold, args.force, args.verbose)
-        case 'trash':
-            run_trash(args.path)
-        case 'remove-doi':
-            _cmd_remove_doi(args)
-        case 'cited-by':
-            run_cited_by_interactive() if args.path == '-' else run_cited_by(args.path, args.max)
-        case 'archive':
-            run_archive(args.source, args.target)
-        case 'rename-pdf':
-            run_rename_pdf(args.directory)
-        case 'clean-images':
-            run_clean_images()
-        case 'reconcile':
-            run_reconcile(dry_run=not args.force)
+    handlers = {
+        'pdf2md': lambda: run_pdf2md(args.path_pdf, getattr(args, 'path_zip', None), args.path_md0,
+                                     args.enable_api_references, args.enable_cited_by, args.cited_by_max,
+                                     local=False, path_images=args.path_images, ref_max_age=args.ref_max_age),
+        'pdf2md-local': lambda: run_pdf2md(args.path_pdf, getattr(args, 'path_zip', None), args.path_md0,
+                                           args.enable_api_references, args.enable_cited_by, args.cited_by_max,
+                                           local=True, path_images=args.path_images, ref_max_age=args.ref_max_age),
+        'markdown': lambda: run_markdown_graph(args.path),
+        'crossref': lambda: crossref_handle(args.input) if args.input else run_crossref_interactive(),
+        'match': lambda: run_match(args.base_dir, args.dry_run, args.threshold, args.force, args.verbose),
+        'trash': lambda: run_trash(args.path),
+        'remove-doi': lambda: _cmd_remove_doi(args),
+        'cited-by': lambda: run_cited_by_interactive() if args.path == '-' else run_cited_by(args.path, args.max),
+        'archive': lambda: run_archive(args.source, args.target),
+        'rename-pdf': lambda: run_rename_pdf(args.directory),
+        'clean-images': lambda: run_clean_images(),
+        'reconcile': lambda: run_reconcile(dry_run=not args.force),
+        'unify-symbols': lambda: run_unify_symbols(args.vault, dry_run=not args.force),
+    }
+    handlers.get(args.command, lambda: None)()
 
 
 if __name__ == '__main__':

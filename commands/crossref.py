@@ -1,5 +1,5 @@
-"""/s: Crossref API reference tool (4 modes).
-"""
+"""/s: Crossref reference lookup tool (4 modes) for DOI references."""
+
 import re
 from difflib import SequenceMatcher
 from pathlib import Path

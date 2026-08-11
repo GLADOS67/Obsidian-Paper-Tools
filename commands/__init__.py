@@ -1,2 +1,2 @@
-"""/s: Commands — pdf2md, clean_images, reconcile, rename_pdf, markdown_graph, crossref, match, trash, remove_doi, cited_by, archive.
-"""
+"""/s: command modules for Obsidian Vault: archive, cited_by, clean_images, crossref, markdown_graph, match, pdf2md, reconcile, remove_doi, rename_pdf, trash, unify_symbols. Crossref, PubMed, MinerU, DOI."""
+

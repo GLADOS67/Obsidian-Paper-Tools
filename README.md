@@ -4,9 +4,7 @@
 
 ---
 
-# Obsidian-Paper-Tools 3.0 — 织命者卡洛斯
-
-> **织命者卡洛斯 (Kairos, the Fate-Weaver)** — 太古双首龙，左首回忆过去（match 追溯引用链——获取论文引用的 DOI），右首望向未来（cited-by 顺流而下——谁引用了这篇论文？），却双双盲于此刻——而此刻正是 reconcile 必须跨越的裂隙。Kairos 在古希腊语中意为"关键时刻"。
+# Obsidian-Paper-Tools 3.1 — 织命者卡洛斯
 
 > Obsidian. Our Vault. 🔗 Links. 🧠 Graph. 📂 Open formats.
 > Our way of research.
@@ -38,7 +36,7 @@
 >
 > BECOME A VAULTTOOLER.
 >
-> *— Cloud & local PDF-to-Markdown · Image GC · Reconcile PA/PT/FE links · DOI citation graph · PubMed API · note matching & archiving*
+> *— Cloud & local PDF-to-Markdown · Image GC · Reconcile PA/PT/FE links · DOI citation graph · PubMed API · Unicode symbol unification · note matching & archiving*
 
 ---
 
@@ -75,6 +73,7 @@ pip install .
 | `remove-doi` | Remove wrong DOI wikilinks from all .md | 从所有 .md 中删除错误 DOI |
 | `cited-by` | Query PubMed for papers citing a given DOI | 查询 PubMed 引用某 DOI 的论文 |
 | `archive` | Hardlink/copy a note + dependent files to target vault | 硬链接/复制笔记及其依赖文件到目标库 |
+| `unify-symbols` | Replace Unicode special chars with ASCII across vault .md | 统一全库 .md 的 Unicode 特殊字符为 ASCII |
 
 ---
 
@@ -324,6 +323,22 @@ vaultools archive -s note.md -t C:\Vault2\Clippings
 
 ---
 
+### `unify-symbols` — Unicode Symbol Unification / 字符统一
+
+| Arg | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--vault` | str | `C:\Vault` | Vault root to scan for .md files |
+| `--force` | flag | — | Actually apply changes (default is dry-run) |
+
+Scans all .md files in the vault, replaces Unicode special characters (smart quotes, dashes, etc.) with ASCII equivalents in filenames and wikilinks.
+
+```bash
+vaultools unify-symbols
+vaultools unify-symbols --vault C:\Vault --force
+```
+
+---
+
 ## Configuration
 
 Edit `config.py` before first use:
@@ -360,7 +375,8 @@ DEFAULT_IMAGE_PATH = Path(r'C:\Vault\IMAGE')
 │   ├── trash.py           # Directory archiver / 目录归档
 │   ├── remove_doi.py      # DOI removal / DOI 移除
 │   ├── cited_by.py        # PubMed cited-by query / PubMed cited-by
-│   └── archive.py         # Vault-to-vault archiver / Vault 间归档
+│   ├── archive.py         # Vault-to-vault archiver / Vault 间归档
+│   └── unify_symbols.py   # Unicode→ASCII symbol unification / 字符统一
 ├── core/
 │   ├── crossref_api.py    # Crossref + PubMed E-utilities API
 │   ├── doi.py             # DOI regex / repair / canonicalization
@@ -428,9 +444,7 @@ MIT
 
 **作者：** Li Kan <lik1453529@163.com>
 
-# Obsidian-Paper-Tools 3.0 — 织命者卡洛斯
-
-> **织命者卡洛斯 (Kairos)** — 太古双首龙，左首回忆过去（match 追溯引用链——获取论文引用的 DOI），右首望向未来（cited-by 顺流而下——谁引用了这篇论文？），却双双盲于此刻——而此刻正是 reconcile 必须跨越的裂隙。Kairos 在古希腊语中意为"关键时刻"。
+# Obsidian-Paper-Tools 3.1 — 织命者卡洛斯
 
 > Obsidian。Our Vault。🔗 双向链接。🧠 关系图谱。📂 开放格式。
 > 我们的科研之道。
@@ -462,7 +476,7 @@ MIT
 >
 > 成为 VAULTTOOLER。
 >
-> *— 云端与本地 PDF 转 Markdown · 图片垃圾回收 · DOI 引用图谱 · Crossref 缓存清洗 · PubMed API · PyMuPDF 重命名 · 笔记匹配与归档*
+> *— 云端与本地 PDF 转 Markdown · 图片垃圾回收 · DOI 引用图谱 · Crossref 缓存清洗 · PubMed API · PyMuPDF 重命名 · 字符统一 · 笔记匹配与归档*
 
 ---
 
@@ -499,6 +513,7 @@ pip install .
 | `remove-doi` | 从所有 .md 中删除错误 DOI | Remove wrong DOI wikilinks from all .md |
 | `cited-by` | 查询 PubMed 引用某 DOI 的论文 | Query PubMed for papers citing a given DOI |
 | `archive` | 硬链接/复制笔记及其依赖文件到目标库 | Hardlink/copy a note + dependent files to target vault |
+| `unify-symbols` | 统一全库 .md 的 Unicode 特殊字符为 ASCII | Replace Unicode special chars with ASCII across vault .md |
 
 ---
 
@@ -714,6 +729,22 @@ vaultools archive -s note.md -t C:\Vault2\Clippings
 
 ---
 
+### `unify-symbols` — 字符统一
+
+| 参数 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `--vault` | str | `C:\Vault` | Vault 根目录 |
+| `--force` | flag | — | 实际执行修改（默认为预览模式） |
+
+扫描全库 .md 文件，将文件名与 wikilink 中的 Unicode 特殊字符（智能引号、破折号等）统一为 ASCII 等价字符。
+
+```bash
+vaultools unify-symbols
+vaultools unify-symbols --vault C:\Vault --force
+```
+
+---
+
 ## 配置
 
 首次使用前编辑 `config.py`：
@@ -750,7 +781,8 @@ DEFAULT_IMAGE_PATH = Path(r'C:\Vault\IMAGE')
 │   ├── trash.py           # 目录归档器
 │   ├── remove_doi.py      # DOI 移除
 │   ├── cited_by.py        # PubMed cited-by 查询
-│   └── archive.py         # Vault 间归档
+│   ├── archive.py         # Vault 间归档
+│   └── unify_symbols.py   # 字符统一
 ├── core/
 │   ├── crossref_api.py    # Crossref + PubMed E-utilities API
 │   ├── doi.py             # DOI 正则 / 修复 / 规范化
@@ -813,40 +845,45 @@ DEFAULT_IMAGE_PATH = Path(r'C:\Vault\IMAGE')
 
 MIT
 
-## 增量对比 (vs v2.3)
+## 增量对比 (vs v3.0)
 
-| 维度 | v2.3 | v3.0 |
+| 维度 | v3.0 | v3.1 |
 | --- | --- | --- |
-| **新增文件** | — | `commands/reconcile.py`（新增 `reconcile` 命令，约 284 行） |
-| **移除文件** | — | —（*.py / *.toml / *.md 范围内无移除） |
-| **cli.py** | 117 行 | 122 行 · 新增 `reconcile` 子命令（`--dry-run` 默认开启 / `--force`）并导入 `run_reconcile`；docstring 精简 |
-| **config.py** | 11 行 | 11 行 · docstring 改为提及 PENDING Clippings，移除 Crossref cache |
-| **pyproject.toml** | 21 行 | 21 行 · description 新增 PA/PT/FE reconcile，移除 image GC / citation graph |
-| **commands/__init__.py** | 3 行 | 2 行 · docstring 精简为单行并加入 reconcile |
-| **commands/archive.py** | 186 行 | 132 行 · 删除 `PATTERN_IMG` / `_fix_image_paths` 图片复制与路径改写逻辑及 `DEFAULT_IMAGE_PATH` 依赖；`_find_parent` 改单循环；结尾提示改为「归档完成」 |
-| **commands/cited_by.py** | 108 行 | 92 行 · 删除本地 `_collect_existing`，改用 `core.frontmatter.build_doi_set`；目录输入自动下钻 `Clippings`；`glob` → `rglob` |
-| **commands/clean_images.py** | 70 行 | 70 行 · 仅 docstring 精简 |
-| **commands/crossref.py** | 298 行 | 296 行 · 新增 `_USAGE_MSG` 统一错误提示；`handle_input` 错误分支重构；retry 打印合并 |
-| **commands/markdown_graph.py** | 211 行 | 210 行 · `is_special` / `removed` 改内联表达式；打印标点修正 |
-| **commands/match.py** | 189 行 | 350 行 · 新增反向索引（chi/pa/fe_reverse）、H1 中文标题提取、SequenceMatcher 模糊匹配（阈值 0.7）、正文 DOI 匹配；`_match_pa` / `_match_fe` 取代通用 `_match_prop`；wikilink 支持 `[[stem|别名]]` |
-| **commands/pdf2md.py** | 636 行 | 614 行 · 删除本地 `_build_clippings_all_doi_set` 改用 `build_doi_set`；`extract_text` 递归改迭代栈；参考条目改列表推导 |
-| **commands/remove_doi.py** | 25 行 | 25 行 · 仅 docstring 精简 |
-| **commands/rename_pdf.py** | 229 行 | 232 行 · `_is_title_junk` 条件拆分；重命名成功后打印 `原名 -> 新名` |
-| **core/crossref_api.py** | 196 行 | 196 行 · `get_cited_by_pubmed` 缓存命中 / `_finalize` 内联、请求参数换行、links 列表推导；移除 esummary 异常分支多余 sleep |
-| **core/doi.py** | 110 行 | 110 行 · `PATTERN_DOI_REPAIR2` 的 `\s+` 改为 `[ \t]+` |
-| **core/frontmatter.py** | 59 行 | 89 行 · 正则兼容 CRLF（`\r?\n`）；多编码 `for...else` 解码；新增 `read_fm()` 与 `build_doi_set()` |
-| **core/markdown_utils.py** | 49 行 | 49 行 · 仅 docstring 精简 |
-| **core/refs.py** | 56 行 | 56 行 · 仅 docstring 精简 |
-| **core/__init__.py** | 2 行 | 2 行 · 仅 docstring 精简 |
-| **README.md** | 817 行 | 811 行 · EN/ZH 命令表新增 `reconcile` 行；新增 reconcile 章节与 clean-images 用法；删除 v2.3 末尾「增量对比 (vs v2.3)」整章 |
+| **新增文件** | — | `commands/unify_symbols.py`（新增 unify-symbols 命令） |
+| **移除文件** | 无（v3.1 保留 v3.0 全部 23 个文件） | — |
+| **cli.py** | 121 行 | 121 行 · 新增 `unify-symbols` 子命令；`match args.command:` 重构为 handlers 字典分发 |
+| **config.py** | 10 行 | 10 行 · 仅 docstring 精简：`Path & API config — ...` → `Global path constants` |
+| **core/__init__.py** | 2 行 | 24 行 · 新增 `is_vault_dir()`（识别 Clippings/Claude/Chi）与 `try_copy()`（硬链接→复制） |
+| **core/refs.py** | 55 行 | 143 行 · 新增 `canonicalize_stem`（Unicode 破折号/引号→ASCII）及从 match/reconcile 迁移的 wikilink 工具函数 |
+| **core/obsidian_path.py** | 85 行 | 85 行 · 仅 docstring 精简 |
+| **core/markdown_utils.py** | 48 行 | 48 行 · 仅 docstring 精简 |
+| **core/frontmatter.py** | 88 行 | 88 行 · 仅 docstring 精简 |
+| **core/doi.py** | 105 行 | 130 行 · `is_plausible_doi` 增加长度/双DOI/`doi:`标签/统计CI/引用尾过滤；`get_main_doi` 改为优先正文首个 DOI |
+| **core/crossref_api.py** | 195 行 | 221 行 · 缺失 DOI 的参考文献改为线程池并发补全，缓存读写加锁 |
+| **commands/match.py** | 349 行 | 328 行 · 复用 `core.refs` 工具；`_match_pa` 传入 DOI 缓存参数；新增 `_pa_by_doi` |
+| **commands/markdown_graph.py** | 209 行 | 222 行 · 文件处理改为线程池并发 |
+| **commands/crossref.py** | 295 行 | 295 行 · 仅 docstring 精简 |
+| **commands/clean_images.py** | 69 行 | 69 行 · 仅 docstring 精简 |
+| **commands/cited_by.py** | 91 行 | 108 行 · 批处理改为线程池并发 |
+| **commands/archive.py** | 131 行 | 111 行 · 辅助函数内联；`_copy_status` → `_copy_file` |
+| **commands/remove_doi.py** | 24 行 | 40 行 · 改为线程池并发 |
+| **commands/reconcile.py** | 284 行 | 244 行 · 引用文件（`*_citations`）强制保留；重复文件检测；移动目标冲突时改移入 TRASH |
+| **commands/pdf2md.py** | 658 行 | 647 行 · 输出文件名 `canonicalize_stem` 规范化；PDF 提取 DOI 前去除换行；轮询请求失败重试；`_mark_pdf_done` 内联移除 |
+| **commands/trash.py** | 88 行 | 88 行 · 仅 docstring 精简 |
+| **commands/rename_pdf.py** | 231 行 | 246 行 · `fitz` 移至顶层导入；重命名改为线程池并发 |
+| **commands/__init__.py** | 2 行 | 2 行 · docstring 加入 unify_symbols |
+| **pyproject.toml** | 20 行 | 21 行 · 新增依赖 `PyMuPDF`；描述加入 unify-symbols |
+| **README.md** | 836 行 | 846 行 · 新增 unify-symbols 命令章节/命令表/项目结构；删除末尾「增量对比 (vs v3.0)」章节 |
 
 ### 关键变化
 
-- **新增 `reconcile` 命令（commands/reconcile.py）**：跨 Vault 扫描 `Clippings` / `Claude` / `Chi`，利用 wikilink 反向索引判定 PA/PT/FE 文件的 keep / move / trash，默认 dry-run，`--force` 执行迁移；cli 暴露 `vaultools reconcile [--force]`。
-- **匹配系统升级（commands/match.py，189 → 350 行）**：新增 H1 中文标题别名、反向索引（由目标文件内嵌 wikilink 反查）、SequenceMatcher 模糊匹配（阈值 0.7）与正文 DOI 匹配；PA/FE 链接统一写入 `[[stem|中文标题]]`。
-- **DOI 集合提取下沉复用**：`core/frontmatter.py` 新增 `build_doi_set()` / `read_fm()`，cited_by 与 pdf2md 删除各自重复的 `_collect_existing` / `_build_clippings_all_doi_set`。
-- **archive 移除图片复制逻辑**：`_fix_image_paths` / `PATTERN_IMG` 全部删除，归档不再搬运图片，结尾提示由「请手动验证图片链接是否正确」改为「归档完成」。
-- **frontmatter 兼容性增强**：正则支持 CRLF，多编码解码改为 `for...else`（utf-8 → gbk → replace）。
-- **docstring 全面精简**：多数改动文件 docstring 缩为单行（remove_doi / clean_images / markdown_utils / refs / __init__ 等仅此差异）。
-- **完全一致（零差异）**：`commands/trash.py`、`core/obsidian_path.py`。
-- **scripts 目录重组（超出 .py/.toml/.md 范围）**：v2.3 平铺的 `scripts/*.bat` 迁入 `scripts/全栈/` 与 `scripts/库/` 两个子目录，并新增 `scripts/全栈/RECONCILE.bat`。
+- **新增 `unify-symbols` 命令（唯一新文件 `commands/unify_symbols.py`）**：扫描全库（Claude/Chi/Clippings）`.md`，将文件名与 wikilink 中的 Unicode 特殊字符（智能引号、破折号等）统一为 ASCII 等价物；默认 dry-run，`--force` 实际执行（重命名文件 + 更新链接）。
+- **Unicode 规范化下沉至 `core.refs.canonicalize_stem`**：`match.py` / `reconcile.py` / `pdf2md.py` / `unify_symbols.py` 共用同一规范化表；`core/doi.py` 的 `SMART_QUOTE_TABLE` 同步改为按典化引号映射 + ASCII 破折号。
+- **并发改造（本轮最大主题）**：`markdown_graph`、`cited_by`、`remove_doi`、`rename_pdf` 及 `crossref_api.fetch_references`（缺失 DOI 补全）改为 `ThreadPoolExecutor` 并发；共享缓存/集合用 `threading.Lock` 保护。
+- **`cli.py` 重构**：`match args.command:` 匹配式改为 `handlers` 字典 + `handlers.get(...)()` 分发，并注册 `unify-symbols`。
+- **`reconcile` 增强**：`*_citations` 引用文件强制保留（`[citation]` 标记）；`foo 2.md` 类重复文件检测（`[duplicate]` 标记）；移动目标冲突时不再 `[SKIP]`，而是将源文件移入 TRASH 并统计 `dupes_trashed`。
+- **`pdf2md` 完善**：PDF 文本提取 DOI 前 `\n`→空格修复跨行 DOI；MinerU 批量轮询遇请求异常时等待重试而非直接失败；输出 MD 文件名经 `canonicalize_stem` 规范化；`_mark_pdf_done` 内联删除。
+- **`doi.is_plausible_doi` 过滤增强**：>200 字符、含双 DOI、含 `.doi:` 标签、统计量/置信区间、引用尾缀等候选一律拒绝，显著降低误检。
+- **依赖变更**：`pyproject.toml` 新增 `PyMuPDF` 依赖（原为可选运行时导入，现声明为必需）。
+- **docstring 全面统一重写**：`config.py`、`core/obsidian_path.py`、`core/markdown_utils.py`、`core/frontmatter.py`、`commands/crossref.py`、`commands/clean_images.py`、`commands/trash.py` 仅此差异。
+- **README**：新增 unify-symbols 命令说明（中英双语）、命令表与项目结构条目；删除 v3.0 末尾「增量对比 (vs v3.0)」章节（v3.1 不保留历史对比）。
