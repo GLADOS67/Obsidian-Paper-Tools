@@ -5,14 +5,13 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import pdfplumber
-
 from core.crossref_api import (fetch_references, get_doi_from_citation,
                                 load_cache, save_cache)
-from core.doi import (PATTERN_DOI, UNICODE_DASH_TABLE, extract_doi_from_frontmatter,
+from core.doi import (PATTERN_DOI, extract_doi_from_frontmatter,
                        find_plausible_dois, get_main_doi, process_doi, repair_doi_text)
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.obsidian_path import resolve_input_path, SM_QUICK
+from core.pdf_extractor import extract_first_doi_from_pdf
 from core.refs import new_doi_wikilinks, process_existing_references, split_wikilink
 
 RE_MD_HEADING = re.compile(r'^#\s+(.+)', re.MULTILINE)
@@ -62,24 +61,11 @@ def update_md_references(md_path: Path, references: List[Dict], main_doi: Option
     print(f'成功更新Markdown文件: {md_path}')
 
 
-def _extract_doi_from_pdf(pdf_path: Path) -> Optional[str]:
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                text = (page.extract_text() or '').translate(UNICODE_DASH_TABLE)
-                dois = find_plausible_dois(repair_doi_text(text))
-                if dois:
-                    return dois[0]
-    except Exception as e:
-        print(f'PDF提取主DOI失败: {e}')
-    return None
-
-
 def _get_main_doi(pdf_path: Optional[Path], content: Optional[str], fm: Optional[dict]) -> Optional[str]:
     main = extract_doi_from_frontmatter(fm) if fm else None
     if main:
         return main
-    if pdf_path and pdf_path.exists() and (doi := _extract_doi_from_pdf(pdf_path)):
+    if pdf_path and pdf_path.exists() and (doi := extract_first_doi_from_pdf(pdf_path)):
         return process_doi(doi)[0]
     return get_main_doi(fm or {}, content or '')
 

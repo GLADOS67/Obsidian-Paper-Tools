@@ -1,7 +1,6 @@
 """/s: MinerU PDF batch-to-Markdown pipeline with DOI / Crossref / PubMed enrichment."""
 
 import json
-import multiprocessing
 import os
 import re
 import shutil
@@ -13,7 +12,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
-import pdfplumber
 import requests
 
 from core.crossref_api import (fetch_references, get_doi_from_citation,
@@ -26,6 +24,7 @@ from core.frontmatter import (build_doi_set, cited_by_fresh, dump_frontmatter,
 from core.markdown_utils import clean_markdown_body
 from core.refs import build_existing_dois, canonicalize_stem, new_doi_wikilinks, process_existing_references
 from core import try_copy, is_vault_dir
+from core.pdf_extractor import convert_pdf_to_md, extract_dois_from_pdf
 from config import DEFAULT_IMAGE_PATH, OBSIDIAN_ROOT
 
 
@@ -138,37 +137,6 @@ def _replace_urls(content, urls):
     )
 
 
-def _pdf_extract_task(queue, pdf_path):
-    with pdfplumber.open(pdf_path) as pdf:
-        queue.put('\n'.join(normalize_unicode_dashes(page.extract_text() or '')
-                            for page in pdf.pages))
-
-
-def _extract_pdf_dois(pdf_path):
-    if not (pdf_path and pdf_path.exists()):
-        return set()
-    try:
-        ctx = multiprocessing.get_context('spawn')
-        result_queue = ctx.Queue()
-        p = ctx.Process(target=_pdf_extract_task,
-                        args=(result_queue, pdf_path))
-        p.start()
-        p.join(timeout=60)
-        if p.is_alive():
-            p.terminate()
-            p.join()
-            print(f'PDF文本提取超时(60s)，跳过 {pdf_path.name}')
-            return set()
-        pdf_text = result_queue.get() if not result_queue.empty() else None
-        p.close()
-        if pdf_text:
-            # 去除换行使跨行断开的DOI能被PATTERN_DOI_SPLICE拼接修复
-            pdf_text = pdf_text.replace('\n', ' ')
-            return set(find_plausible_dois(repair_doi_text(pdf_text)))
-    except Exception as e:
-        print(f'从PDF提取DOI失败 {pdf_path.name}: {e}')
-    return set()
-
 
 def _update_cited_by(fm, main_doi, crossref_cache, cited_by_max, clippings_doi_set):
     if cited_by_fresh(fm):
@@ -213,7 +181,7 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_ca
 
     dois_md = set(find_plausible_dois(repair_doi_text(content)))
     json_dois, urls = _extract_json_data(json_src)
-    dois_pdf = _extract_pdf_dois(pdf_path) if pdf_path else set()
+    dois_pdf = extract_dois_from_pdf(pdf_path) if pdf_path else set()
 
     all_dois = dois_md | json_dois | dois_pdf
     if urls:
@@ -325,92 +293,6 @@ def _find_extracted_files(temp_dir):
     return md_src, img_src, json_src
 
 
-_SENTENCE_END = '.。!！?？:：;；)）]】-—'
-
-_RE_NUMBERED_HEADING = re.compile(r'^[\d.]+\s+\w')
-_RE_SECTION_HEADING = re.compile(
-    r'^(Abstract|Introduction|Methods?|Results?|Discussion|Conclusion|References?|'
-    r'Acknowledgments?|Supplementary|Appendix)',
-    re.IGNORECASE
-)
-
-
-def _table_to_md(table):
-    data = table.extract()
-    if not data:
-        return ''
-    max_cols = max(len(row) for row in data)
-    separator = '| ' + ' | '.join(['---'] * max_cols) + ' |'
-    has_content = False
-    lines = []
-    for row in data:
-        cells = [str(c).replace('\n', ' ').strip() if c else '' for c in row]
-        cells += [''] * (max_cols - len(row))
-        if not has_content:
-            has_content = any(cells)
-        lines.append('| ' + ' | '.join(cells) + ' |')
-    if not has_content:
-        return ''
-    lines.insert(1, separator)
-    return '\n'.join(lines) + '\n'
-
-
-def _merge_paragraphs(text):
-    lines = text.split('\n')
-    result, i = [], 0
-    while i < len(lines):
-        line = lines[i].rstrip()
-        if not line:
-            result.append('')
-            i += 1
-            continue
-        while i + 1 < len(lines):
-            nxt = lines[i + 1].strip()
-            if not nxt:
-                break
-            if line[-1] in _SENTENCE_END and not line.endswith('-') and not nxt[0].islower():
-                break
-            line = (line[:-1] + nxt) if line.endswith('-') else f'{line} {nxt}'
-            i += 1
-        result.append(line)
-        i += 1
-    return '\n'.join(result)
-
-
-def _post_process_markdown(text):
-    result = []
-    for line in text.split('\n'):
-        stripped = line.strip()
-        if not stripped.startswith('#') and (
-            _RE_NUMBERED_HEADING.match(stripped)
-            or (len(stripped) < 80 and stripped.isupper() and sum(c.isalpha() for c in stripped) > 3)
-            or _RE_SECTION_HEADING.match(stripped)
-        ):
-            result.append(f'## {stripped}')
-        else:
-            result.append(line)
-    return '\n'.join(result)
-
-
-def convert_pdf_to_markdown(pdf_path):
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            parts = []
-            for page in pdf.pages:
-                text = page.extract_text(x_tolerance=2, y_tolerance=2)
-                if text:
-                    parts.append(_merge_paragraphs(text))
-                for t in page.find_tables():
-                    mt = _table_to_md(t)
-                    if mt:
-                        parts.append(mt)
-                parts.append('')
-        raw = normalize_unicode_dashes('\n'.join(parts))
-        return _post_process_markdown(raw)
-    except Exception as e:
-        print(f'PDF转换失败 {pdf_path}: {e}')
-        return ''
-
 
 def _run_local_batch(pdf_files, path_md0, enable_api_refs,
                      crossref_cache, enable_cited_by, cited_by_max,
@@ -420,7 +302,7 @@ def _run_local_batch(pdf_files, path_md0, enable_api_refs,
 
     def _process_one(pdf_path, idx):
         print(f'[{idx}/{len(pdf_files)}] {pdf_path.name}')
-        md_content = convert_pdf_to_markdown(pdf_path)
+        md_content = convert_pdf_to_md(pdf_path)
         if not md_content:
             print('  转换失败，跳过')
             return None

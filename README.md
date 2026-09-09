@@ -4,7 +4,7 @@
 
 ---
 
-# Obsidian-Paper-Tools 3.1 — 织命者卡洛斯
+# Obsidian-Paper-Tools 3.2 — 织命者卡洛斯
 
 > Obsidian. Our Vault. 🔗 Links. 🧠 Graph. 📂 Open formats.
 > Our way of research.
@@ -36,7 +36,7 @@
 >
 > BECOME A VAULTTOOLER.
 >
-> *— Cloud & local PDF-to-Markdown · Image GC · Reconcile PA/PT/FE links · DOI citation graph · PubMed API · Unicode symbol unification · note matching & archiving*
+> *— Cloud & local PDF-to-Markdown · PDF metadata extraction · Image GC · Reconcile PA/PT/FE links · DOI citation graph · PubMed API · Unicode symbol unification · note matching & archiving*
 
 ---
 
@@ -339,6 +339,20 @@ vaultools unify-symbols --vault C:\Vault --force
 
 ---
 
+### `pdf_extractor` — PDF Metadata & First-Page Title Extraction / PDF 元数据与标题提取 (core)
+
+`core/pdf_extractor.py` provides pdfplumber/PyMuPDF utilities reused by `pdf2md-local` and `rename-pdf`:
+
+| Function | Purpose |
+| --- | --- |
+| `extract_text` | Extract all pages as normalized text |
+| `extract_dois_from_pdf` | Multiprocessing-safe DOI extraction from PDF text |
+| `extract_first_doi_from_pdf` | First-page DOI extraction |
+| `table_to_md` | Convert pdfplumber tables to Markdown |
+| `convert_pdf_to_md` | Full pdfplumber PDF → Markdown conversion |
+
+---
+
 ## Configuration
 
 Edit `config.py` before first use:
@@ -383,6 +397,7 @@ DEFAULT_IMAGE_PATH = Path(r'C:\Vault\IMAGE')
 │   ├── frontmatter.py     # YAML frontmatter parse/dump
 │   ├── markdown_utils.py  # Markdown body cleaning
 │   ├── obsidian_path.py   # Obsidian URI resolution
+│   ├── pdf_extractor.py   # pdfplumber/PyMuPDF PDF metadata & first-page title extraction
 │   └── refs.py            # Wikilink reference utilities
 └── scripts/               # .bat shortcuts for Windows
 ```
@@ -444,7 +459,7 @@ MIT
 
 **作者：** Li Kan <lik1453529@163.com>
 
-# Obsidian-Paper-Tools 3.1 — 织命者卡洛斯
+# Obsidian-Paper-Tools 3.2 — 织命者卡洛斯
 
 > Obsidian。Our Vault。🔗 双向链接。🧠 关系图谱。📂 开放格式。
 > 我们的科研之道。
@@ -476,7 +491,7 @@ MIT
 >
 > 成为 VAULTTOOLER。
 >
-> *— 云端与本地 PDF 转 Markdown · 图片垃圾回收 · DOI 引用图谱 · Crossref 缓存清洗 · PubMed API · PyMuPDF 重命名 · 字符统一 · 笔记匹配与归档*
+> *— 云端与本地 PDF 转 Markdown · PDF 元数据提取 · 图片垃圾回收 · DOI 引用图谱 · Crossref 缓存清洗 · PubMed API · PyMuPDF 重命名 · 字符统一 · 笔记匹配与归档*
 
 ---
 
@@ -745,6 +760,20 @@ vaultools unify-symbols --vault C:\Vault --force
 
 ---
 
+### `pdf_extractor` — PDF 元数据与首页标题提取（core）
+
+`core/pdf_extractor.py` 提供 `pdf2md-local` 和 `rename-pdf` 复用的 pdfplumber/PyMuPDF 工具：
+
+| 函数 | 用途 |
+| --- | --- |
+| `extract_text` | 提取全部页面为规范化文本 |
+| `extract_dois_from_pdf` | 多进程安全的 PDF DOI 提取 |
+| `extract_first_doi_from_pdf` | 首页 DOI 提取 |
+| `table_to_md` | 将 pdfplumber 表格转为 Markdown |
+| `convert_pdf_to_md` | 完整的 pdfplumber PDF → Markdown 转换 |
+
+---
+
 ## 配置
 
 首次使用前编辑 `config.py`：
@@ -789,6 +818,7 @@ DEFAULT_IMAGE_PATH = Path(r'C:\Vault\IMAGE')
 │   ├── frontmatter.py     # YAML frontmatter 解析/写入
 │   ├── markdown_utils.py  # Markdown 正文清理
 │   ├── obsidian_path.py   # Obsidian URI 解析
+│   ├── pdf_extractor.py   # pdfplumber/PyMuPDF PDF 元数据与首页标题提取
 │   └── refs.py            # Wikilink 引用工具
 ├── scripts/               # Windows .bat 快捷方式
 └── tests/
@@ -845,45 +875,23 @@ DEFAULT_IMAGE_PATH = Path(r'C:\Vault\IMAGE')
 
 MIT
 
-## 增量对比 (vs v3.0)
+## 增量对比 (vs v3.1)
 
-| 维度 | v3.0 | v3.1 |
+| 维度 | v3.1 | v3.2 |
 | --- | --- | --- |
-| **新增文件** | — | `commands/unify_symbols.py`（新增 unify-symbols 命令） |
-| **移除文件** | 无（v3.1 保留 v3.0 全部 23 个文件） | — |
-| **cli.py** | 121 行 | 121 行 · 新增 `unify-symbols` 子命令；`match args.command:` 重构为 handlers 字典分发 |
-| **config.py** | 10 行 | 10 行 · 仅 docstring 精简：`Path & API config — ...` → `Global path constants` |
-| **core/__init__.py** | 2 行 | 24 行 · 新增 `is_vault_dir()`（识别 Clippings/Claude/Chi）与 `try_copy()`（硬链接→复制） |
-| **core/refs.py** | 55 行 | 143 行 · 新增 `canonicalize_stem`（Unicode 破折号/引号→ASCII）及从 match/reconcile 迁移的 wikilink 工具函数 |
-| **core/obsidian_path.py** | 85 行 | 85 行 · 仅 docstring 精简 |
-| **core/markdown_utils.py** | 48 行 | 48 行 · 仅 docstring 精简 |
-| **core/frontmatter.py** | 88 行 | 88 行 · 仅 docstring 精简 |
-| **core/doi.py** | 105 行 | 130 行 · `is_plausible_doi` 增加长度/双DOI/`doi:`标签/统计CI/引用尾过滤；`get_main_doi` 改为优先正文首个 DOI |
-| **core/crossref_api.py** | 195 行 | 221 行 · 缺失 DOI 的参考文献改为线程池并发补全，缓存读写加锁 |
-| **commands/match.py** | 349 行 | 328 行 · 复用 `core.refs` 工具；`_match_pa` 传入 DOI 缓存参数；新增 `_pa_by_doi` |
-| **commands/markdown_graph.py** | 209 行 | 222 行 · 文件处理改为线程池并发 |
-| **commands/crossref.py** | 295 行 | 295 行 · 仅 docstring 精简 |
-| **commands/clean_images.py** | 69 行 | 69 行 · 仅 docstring 精简 |
-| **commands/cited_by.py** | 91 行 | 108 行 · 批处理改为线程池并发 |
-| **commands/archive.py** | 131 行 | 111 行 · 辅助函数内联；`_copy_status` → `_copy_file` |
-| **commands/remove_doi.py** | 24 行 | 40 行 · 改为线程池并发 |
-| **commands/reconcile.py** | 284 行 | 244 行 · 引用文件（`*_citations`）强制保留；重复文件检测；移动目标冲突时改移入 TRASH |
-| **commands/pdf2md.py** | 658 行 | 647 行 · 输出文件名 `canonicalize_stem` 规范化；PDF 提取 DOI 前去除换行；轮询请求失败重试；`_mark_pdf_done` 内联移除 |
-| **commands/trash.py** | 88 行 | 88 行 · 仅 docstring 精简 |
-| **commands/rename_pdf.py** | 231 行 | 246 行 · `fitz` 移至顶层导入；重命名改为线程池并发 |
-| **commands/__init__.py** | 2 行 | 2 行 · docstring 加入 unify_symbols |
-| **pyproject.toml** | 20 行 | 21 行 · 新增依赖 `PyMuPDF`；描述加入 unify-symbols |
-| **README.md** | 836 行 | 846 行 · 新增 unify-symbols 命令章节/命令表/项目结构；删除末尾「增量对比 (vs v3.0)」章节 |
+| **新增文件** | — | `core/pdf_extractor.py`（PDF 工具集中化模块，168 行） |
+| **移除文件** | 无（v3.2 保留 v3.1 全部 23 个 py/toml/md 文件） | — |
+| **README.md** | 811 行 | 876 行 · 两处 tagline 新增「PDF metadata extraction / PDF 元数据提取」；新增中英文 `### pdf_extractor` 章节（函数表）；两处项目结构树新增 `core/pdf_extractor.py`；删除末尾「增量对比 (vs v3.0)」章节（v3.2 不保留历史对比） |
+| **pyproject.toml** | 21 行 | 21 行 · 仅 `description` 变更：`unify-symbols (Unicode→ASCII)` → `pdf_extractor (PyMuPDF/pdfplumber metadata)`；version 仍为 1.0.0 |
+| **core/__init__.py** | 24 行 | 24 行 · 仅 docstring 变更：模块清单加入 `pdf_extractor` |
+| **commands/crossref.py** | 295 行 | 280 行 · 删除 `import pdfplumber`；doi 导入去掉 `UNICODE_DASH_TABLE`；新增 `from core.pdf_extractor import extract_first_doi_from_pdf`；内联 `_extract_doi_from_pdf` 函数移除，`_get_main_doi` 改调 `extract_first_doi_from_pdf`（DOI 加 ≤80 字符过滤） |
+| **commands/pdf2md.py** | 647 行 | 590 行 · 删除 `import multiprocessing`/`import pdfplumber`；`_pdf_extract_task`、`_extract_pdf_dois`、`convert_pdf_to_markdown` 及配套 `_table_to_md`/`_merge_paragraphs`/`_post_process_markdown`/正则常量全部迁移至 core；`_process_md_content` 用 `extract_dois_from_pdf`、`_run_local_batch` 用 `convert_pdf_to_md` |
+| **core/pdf_extractor.py** | —（新增） | 168 行 · `extract_text` / `extract_dois_from_pdf`（spawn 多进程，段落级 `\n`→空格拼接，DOI 长度 ≤80）/ `extract_first_doi_from_pdf` / `table_to_md` / `merge_paragraphs` / `post_process_md` / `convert_pdf_to_md` |
 
 ### 关键变化
 
-- **新增 `unify-symbols` 命令（唯一新文件 `commands/unify_symbols.py`）**：扫描全库（Claude/Chi/Clippings）`.md`，将文件名与 wikilink 中的 Unicode 特殊字符（智能引号、破折号等）统一为 ASCII 等价物；默认 dry-run，`--force` 实际执行（重命名文件 + 更新链接）。
-- **Unicode 规范化下沉至 `core.refs.canonicalize_stem`**：`match.py` / `reconcile.py` / `pdf2md.py` / `unify_symbols.py` 共用同一规范化表；`core/doi.py` 的 `SMART_QUOTE_TABLE` 同步改为按典化引号映射 + ASCII 破折号。
-- **并发改造（本轮最大主题）**：`markdown_graph`、`cited_by`、`remove_doi`、`rename_pdf` 及 `crossref_api.fetch_references`（缺失 DOI 补全）改为 `ThreadPoolExecutor` 并发；共享缓存/集合用 `threading.Lock` 保护。
-- **`cli.py` 重构**：`match args.command:` 匹配式改为 `handlers` 字典 + `handlers.get(...)()` 分发，并注册 `unify-symbols`。
-- **`reconcile` 增强**：`*_citations` 引用文件强制保留（`[citation]` 标记）；`foo 2.md` 类重复文件检测（`[duplicate]` 标记）；移动目标冲突时不再 `[SKIP]`，而是将源文件移入 TRASH 并统计 `dupes_trashed`。
-- **`pdf2md` 完善**：PDF 文本提取 DOI 前 `\n`→空格修复跨行 DOI；MinerU 批量轮询遇请求异常时等待重试而非直接失败；输出 MD 文件名经 `canonicalize_stem` 规范化；`_mark_pdf_done` 内联删除。
-- **`doi.is_plausible_doi` 过滤增强**：>200 字符、含双 DOI、含 `.doi:` 标签、统计量/置信区间、引用尾缀等候选一律拒绝，显著降低误检。
-- **依赖变更**：`pyproject.toml` 新增 `PyMuPDF` 依赖（原为可选运行时导入，现声明为必需）。
-- **docstring 全面统一重写**：`config.py`、`core/obsidian_path.py`、`core/markdown_utils.py`、`core/frontmatter.py`、`commands/crossref.py`、`commands/clean_images.py`、`commands/trash.py` 仅此差异。
-- **README**：新增 unify-symbols 命令说明（中英双语）、命令表与项目结构条目；删除 v3.0 末尾「增量对比 (vs v3.0)」章节（v3.1 不保留历史对比）。
+- **新增 `core/pdf_extractor.py`（本轮唯一新文件）**：将 pdfplumber 相关逻辑从 `pdf2md.py`（本地转换）与 `crossref.py`（PDF 主 DOI 提取）抽离为统一核心模块，同时导出首页 DOI 提取、多进程安全 DOI 提取、表格→Markdown、段落合并、标题后处理与完整 PDF→MD 转换。
+- **PDF 本地转换整体迁移**：`pdf2md --local` 的 `convert_pdf_to_markdown` 移入 core 改名为 `convert_pdf_to_md`；原模块内 `_table_to_md`、`_merge_paragraphs`、`_post_process_markdown` 及正则常量全部删除，改由 core 提供。
+- **DOI 提取统一并加长过滤**：`extract_dois_from_pdf` 沿用 v3.1 的 spawn 多进程 + 60s 超时设计，但改为按空行分段、段内 `\n`→空格后匹配；`extract_first_doi_from_pdf` 取代 `crossref.py` 内联 `_extract_doi_from_pdf`；两者均新增 `_MAX_DOI_LEN = 80` 长度过滤。
+- **import 精简**：`pdf2md.py` 与 `crossref.py` 移除直接依赖的 `pdfplumber`/`multiprocessing`，改经 core 引用。
+- **README**：中英文 tagline 与项目结构树同步标注 `pdf_extractor`；中英文各新增 pdf_extractor 函数说明表；移除 v3.1 末尾「增量对比 (vs v3.0)」章节（README 不保存超过一轮的历史对比）。
