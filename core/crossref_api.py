@@ -46,10 +46,7 @@ def _api_get(url: str, params: dict = None, timeout: int = 10) -> Optional[dict]
         return None
 
 
-def get_doi_from_citation(citation_text: str, cache: dict = None,
-                         lock: threading.Lock = None) -> Optional[Tuple[str, str]]:
-    cache = cache or {}
-    key = f'cite:{citation_text.strip()}'
+def _lookup_cache(key: str, cache: dict, lock: threading.Lock = None):
     if lock:
         with lock:
             if key in cache:
@@ -58,6 +55,24 @@ def get_doi_from_citation(citation_text: str, cache: dict = None,
     elif key in cache:
         val = cache[key]
         return (val[0], val[1]) if isinstance(val, (tuple, list)) and len(val) == 2 else None
+    return None
+
+
+def _set_cache(key: str, value, cache: dict, lock: threading.Lock = None):
+    if lock:
+        with lock:
+            cache[key] = value
+    else:
+        cache[key] = value
+
+
+def get_doi_from_citation(citation_text: str, cache: dict = None,
+                         lock: threading.Lock = None) -> Optional[Tuple[str, str]]:
+    cache = cache or {}
+    key = f'cite:{citation_text.strip()}'
+    cached = _lookup_cache(key, cache, lock)
+    if cached is not None:
+        return cached
     data = _api_get(CROSSREF_API_BASE, params={
         'rows': 1, 'mailto': 'lik1453529@wmu.edu.cn', 'query': citation_text,
     })
@@ -74,11 +89,7 @@ def get_doi_from_citation(citation_text: str, cache: dict = None,
     if not doi:
         print(f'Crossref结果无DOI: {title[:80]}')
     result = (doi, title) if doi else None
-    if lock:
-        with lock:
-            cache[key] = result
-    else:
-        cache[key] = result
+    _set_cache(key, result, cache, lock)
     return result
 
 
@@ -124,20 +135,20 @@ def fetch_references(doi: str, cache: dict = None) -> List[Dict]:
             refs_with_doi.append({'text': ref.get('unstructured', ''),
                                   'doi': process_doi(ref_doi)[0],
                                   'title': ref.get('article-title') or ref.get('volume-title', '')})
-        elif ref.get('unstructured', ''):
+        elif ref.get('unstructured'):
             refs_missing.append(ref)
 
     if refs_missing:
         lock = threading.Lock()
         print(f'并行补全 {len(refs_missing)} 个缺失DOI...')
         with ThreadPoolExecutor(max_workers=4) as ex:
-            futures = {ex.submit(get_doi_from_citation, r.get('unstructured', ''), cache, lock): r
+            futures = {ex.submit(get_doi_from_citation, r['unstructured'], cache, lock): r
                        for r in refs_missing}
             for fut in as_completed(futures):
                 ref = futures[fut]
                 result = fut.result()
-                ref_doi = result[0] if result else None
-                if ref_doi:
+                if result:
+                    ref_doi = result[0]
                     print(f'补全成功: {ref_doi}')
                     refs_with_doi.append({
                         'text': ref.get('unstructured', ''),

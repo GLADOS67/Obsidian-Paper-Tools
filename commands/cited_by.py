@@ -9,7 +9,7 @@ from typing import Optional
 from core.crossref_api import get_cited_by_pubmed, load_cache, save_cache
 from core.doi import (
     PATTERN_DOI, doi_from_doi_line, extract_doi_from_frontmatter,
-    make_wikilink, process_doi, repair_doi_text,
+    get_main_doi, make_wikilink, process_doi,
 )
 from core.frontmatter import (
     build_doi_set, cited_by_fresh, dump_frontmatter, parse_frontmatter_str,
@@ -18,20 +18,17 @@ from core.obsidian_path import resolve_input_path
 from core.refs import wikilink_doi
 
 
-def _get_main_doi(fm: dict, body: str) -> Optional[str]:
-    main = extract_doi_from_frontmatter(fm)
-    if main:
-        return main
+def _extract_main_doi(fm: dict, body: str) -> Optional[str]:
+    doi = get_main_doi(fm, body)
+    if doi:
+        return doi
     refs = fm.get('reference', [])
     if refs and isinstance(refs[0], str):
         doi = wikilink_doi(refs[0])
         if not doi:
             m = PATTERN_DOI.search(refs[0].split('|', 1)[-1])
             doi = process_doi(m.group(0))[0] if m else None
-        if doi:
-            return doi
-    m = PATTERN_DOI.search(repair_doi_text(body))
-    return process_doi(m.group(0))[0] if m else doi_from_doi_line(body)
+    return doi
 
 
 def _process_cited_file(md_file: Path, cache: dict, existing: set,
@@ -43,7 +40,7 @@ def _process_cited_file(md_file: Path, cache: dict, existing: set,
         return
 
     fm, body = parse_frontmatter_str(content)
-    main_doi = _get_main_doi(fm, body)
+    main_doi = _extract_main_doi(fm, body)
     if not main_doi:
         print(f'[SKIP] {md_file.name}: 未提取到主DOI')
         return

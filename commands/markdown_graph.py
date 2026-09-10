@@ -46,9 +46,7 @@ def _rebuild_reference_list(refs: List, unique_map: Dict[str, DoiEntry],
                             is_existing: bool = True) -> Tuple[List[str], int]:
     if not refs:
         return [], 0
-    special_count = 0
-    seen: set = set()
-    result: list = []
+    special_count, seen, result = 0, set(), []
     for item in refs:
         if is_existing:
             ref = item.strip()
@@ -74,11 +72,11 @@ def _rebuild_reference_list(refs: List, unique_map: Dict[str, DoiEntry],
             _update_doi_map(display_doi, name_part, unique_map, citing_stem)
             entry = unique_map[dedup_key]
             used_name = entry[0][0] or entry[1][0] or process_doi(display_doi)[1]
-            special_count += not PATTERN_SAFE_DOI.match(name_part)
+            special_count += int(not PATTERN_SAFE_DOI.match(name_part))
         else:
             spec = _shared_spec(unique_map.get(dedup_key))
-            used_name = spec or (process_doi(display_doi)[1]
-                                 if PATTERN_SAFE_DOI.match(name_part) else name_part)
+            is_safe = PATTERN_SAFE_DOI.match(name_part)
+            used_name = spec or (process_doi(display_doi)[1] if is_safe else name_part)
         result.append(f'[[{used_name}|{display_doi}]]')
     return result, special_count
 
@@ -149,21 +147,20 @@ def _process_one_file(file: Path, unique_map: Dict[str, DoiEntry],
                 continue
             name, disp = parsed
             dl = disp.lower()
-            if dl not in cited_by_map:
-                cited_by_map[dl] = (disp, [])
+            cited_by_map.setdefault(dl, (disp, []))
             if file.stem not in cited_by_map[dl][1]:
                 cited_by_map[dl][1].append(file.stem)
             _update_doi_map(disp, name, unique_map, file.stem, slot=1)
-        if 'aliases' in fm or 'reference' in fm:
+        if 'aliases' not in fm and 'reference' not in fm:
+            print(f'处理未处理文件：{file.name}')
+            fm, rest = _process_unhandled_file(file, content, fm, rest, unique_map)
+            print(f'  ✅ {file.name} 处理完成')
+        else:
             processed_refs, special_count = _rebuild_reference_list(
                 fm.get('reference', []), unique_map, file.stem, is_existing=True)
             fm['reference'] = processed_refs
             fm['特殊引用数'] = special_count
             print(f'  ✅ {file.name} 收集到 {len(processed_refs)} 个DOI映射，已去重')
-        else:
-            print(f'处理未处理文件：{file.name}')
-            fm, rest = _process_unhandled_file(file, content, fm, rest, unique_map)
-            print(f'  ✅ {file.name} 处理完成')
     return (file, fm, rest)
 
 

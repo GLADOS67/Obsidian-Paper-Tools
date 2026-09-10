@@ -3,20 +3,11 @@
 import re
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from core.doi import PATTERN_DOI, is_plausible_doi, process_doi
+from core.doi import PATTERN_DOI, CANONICAL_CHAR_TABLE, is_plausible_doi, process_doi
 
-_CANONICAL_MAP = {
-    '\u2010': '-', '\u2011': '-', '\u2012': '-', '\u2013': '-',
-    '\u2014': '-', '\u2015': '-', '\u2212': '-',
-    '\u2018': '\u201c', '\u2019': '\u201d', '\u201A': '\u201c',
-    '\u201B': '\u201c', '\u201C': '\u201c', '\u201D': '\u201d',
-    '\u201E': '\u201c', '\u201F': '\u201d', '\u2039': '\u201c',
-    '\u203A': '\u201d',
-}
-_CANONICAL_TABLE = str.maketrans(_CANONICAL_MAP)
 
 def canonicalize_stem(stem: str) -> str:
-    return stem.translate(_CANONICAL_TABLE).replace('\u2026', '...')
+    return stem.translate(CANONICAL_CHAR_TABLE)
 
 
 WIKILINK_RE = re.compile(r'\[\[([^|]+)\|([^]]+)\]\]')
@@ -64,17 +55,16 @@ def extract_doi_set(ref_list: list) -> set:
 _STEM_PREFIX_RE = re.compile(r'^\d+_?\s*')
 
 def norm_stems(stem: str) -> set:
-    normalized = canonicalize_stem(stem)
-    variants = {stem, normalized}
-    for v in list(variants):
+    variants = {stem, canonicalize_stem(stem)}
+    for v in tuple(variants):
         variants.add(v.replace(' ', '_'))
         variants.add(v.replace('_', ' '))
     stripped = _STEM_PREFIX_RE.sub('', stem)
-    if stripped and stripped != stem:
+    if stripped != stem:
         variants.add(stripped)
-        for v in list(variants):
+        for v in tuple(variants):
             sv = _STEM_PREFIX_RE.sub('', v)
-            if sv and sv != v:
+            if sv != v:
                 variants.add(sv)
     return variants
 
@@ -124,20 +114,22 @@ def process_existing_references(refs: List[str]) -> List[str]:
         ref = ref.strip()
         parsed = split_wikilink(ref)
         if parsed and parsed[1]:
-            name, display = parsed[0].replace('/', '￥'), parsed[1]
-            key = display.lower()
+            key = parsed[1].lower()
+            name = parsed[0].replace('/', '￥')
+            display = parsed[1]
         else:
             key = ref
-            display = None
         if key in seen:
             continue
         seen.add(key)
-        processed.append(f'[[{name}|{display}]]' if display else ref)
+        processed.append(f'[[{name}|{display}]]' if (parsed and parsed[1]) else ref)
     return processed
 
 
 def wikilink_doi(ref: str) -> Optional[str]:
-    parsed = split_wikilink(ref.strip()) if isinstance(ref, str) else None
-    name_part, doi_part = (parsed[0], parsed[1]) if parsed else ('', ref.strip())
+    if not isinstance(ref, str):
+        return None
+    parsed = split_wikilink(ref.strip())
+    doi_part = (parsed[1] if parsed else ref).strip()
     m = PATTERN_DOI.search(doi_part)
     return process_doi(m.group(0))[0] if m and is_plausible_doi(m.group(0)) else None

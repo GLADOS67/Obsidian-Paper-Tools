@@ -37,21 +37,25 @@ def _try_strip_dot(full_path: Path) -> Optional[Path]:
 def _fuzzy_search(dir_path: Path, stem_raw: str) -> Optional[Path]:
     if not dir_path.exists() or not stem_raw:
         return None
-    safe_stem = re.sub(r'([\[\]*?])', r'[\1]', stem_raw)
     stem_lower = stem_raw.lower()
     try:
-        candidates = [
-            p for p in dir_path.glob(f'{safe_stem}*.md')
-            if p.stem.lower() == stem_lower
-            or ((sm := SequenceMatcher(None, stem_lower, p.stem.lower())).quick_ratio() >= SM_QUICK
-                and sm.ratio() >= SM_QUICK)
-        ]
-        if candidates:
-            candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-            return candidates[0]
+        best, best_mtime = None, 0
+        safe_stem = re.sub(r'([\[\]*?])', r'[\1]', stem_raw)
+        for p in dir_path.glob(f'{safe_stem}*.md'):
+            p_stem_lower = p.stem.lower()
+            if p_stem_lower == stem_lower:
+                mtime = p.stat().st_mtime
+                if mtime > best_mtime:
+                    best, best_mtime = p, mtime
+                continue
+            sm = SequenceMatcher(None, stem_lower, p_stem_lower)
+            if sm.quick_ratio() >= SM_QUICK and sm.ratio() >= SM_QUICK:
+                mtime = p.stat().st_mtime
+                if mtime > best_mtime:
+                    best, best_mtime = p, mtime
+        return best
     except Exception:
-        pass
-    return None
+        return None
 
 
 def _fallback_search(file_clean: str) -> Optional[Path]:

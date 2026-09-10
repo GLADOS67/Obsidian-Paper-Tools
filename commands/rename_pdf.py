@@ -106,11 +106,9 @@ def _get_metadata_title(doc):
 def _get_first_page_title(doc):
     page = doc[0]
     page_h = page.rect.height
-    blocks = page.get_text("dict").get("blocks", [])
+    blocks = [b for b in page.get_text("dict").get("blocks", []) if b.get("type") == 0]
     spans = []
     for b in blocks:
-        if b.get("type") != 0:
-            continue
         for line in b.get("lines", []):
             line_y, line_x = line["bbox"][1], line["bbox"][0]
             for span in line.get("spans", []):
@@ -158,21 +156,17 @@ def _extract_from_flat_page(spans, page_h):
     if cur:
         blocks.append(cur)
 
-    KEYWORDS_SKIP = ('department', 'university', 'school of', 'hospital', 'institute', 'corresponding author')
-    good_blocks = []
+    SKIP_TERMS = frozenset(('department', 'university', 'school of', 'hospital', 'institute', 'corresponding author'))
+    good = []
     for blk in blocks:
         combined = ' '.join(t for _, t in blk).lower()
-        if any(m in combined for m in STATUS_SET) or DOI_RE.search(combined):
+        if any(m in combined for m in STATUS_SET) or DOI_RE.search(combined) or AUTHOR_DEGREE_RE.search(combined):
             continue
-        if AUTHOR_DEGREE_RE.search(combined):
-            continue
-        if any(kw in combined for kw in KEYWORDS_SKIP):
-            continue
-        if len(combined) >= 20:
-            good_blocks.append(blk)
-    if not good_blocks:
+        if not any(kw in combined for kw in SKIP_TERMS) and len(combined) >= 20:
+            good.append(blk)
+    if not good:
         return None
-    best = max(good_blocks, key=lambda b: sum(len(t) for _, t in b))
+    best = max(good, key=lambda b: sum(len(t) for _, t in b))
     return ' '.join(t for _, t in best)
 
 

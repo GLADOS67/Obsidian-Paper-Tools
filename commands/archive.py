@@ -1,12 +1,11 @@
 """/s: Hardlink/copy notes and assets across Obsidian Vaults."""
 
-import os
 import re
-import shutil
 from pathlib import Path
 from typing import Optional
 
 from core.frontmatter import parse_frontmatter_str
+from core import try_copy
 
 
 def _norm(s: str) -> str:
@@ -39,12 +38,8 @@ def _copy_file(src: Path, dst: Path) -> str:
         return 'not found'
     if dst.exists():
         return 'exists'
-    try:
-        os.link(src, dst)
-        return 'hardlinked'
-    except OSError:
-        shutil.copy2(src, dst)
-        return 'copied'
+    from core import try_copy
+    return 'hardlinked' if try_copy(src, dst) else 'copied'
 
 
 def run_archive(source: str, target: str) -> None:

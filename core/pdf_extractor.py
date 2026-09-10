@@ -92,7 +92,6 @@ def table_to_md(table):
     if not data:
         return ''
     max_cols = max(len(row) for row in data)
-    separator = '| ' + ' | '.join(['---'] * max_cols) + ' |'
     has_content = False
     lines = []
     for row in data:
@@ -103,6 +102,7 @@ def table_to_md(table):
         lines.append('| ' + ' | '.join(cells) + ' |')
     if not has_content:
         return ''
+    separator = '| ' + ' | '.join(['---'] * max_cols) + ' |'
     lines.insert(1, separator)
     return '\n'.join(lines) + '\n'
 
@@ -111,23 +111,15 @@ def table_to_md(table):
 
 def merge_paragraphs(text):
     lines = text.split('\n')
-    result, i = [], 0
-    while i < len(lines):
-        line = lines[i].rstrip()
-        if not line:
+    result = [lines[0].rstrip()] if lines else []
+    for i in range(1, len(lines)):
+        curr, prev = lines[i].rstrip(), result[-1]
+        if not curr:
             result.append('')
-            i += 1
-            continue
-        while i + 1 < len(lines):
-            nxt = lines[i + 1].strip()
-            if not nxt:
-                break
-            if line[-1] in _SENTENCE_END and not line.endswith('-') and not nxt[0].islower():
-                break
-            line = (line[:-1] + nxt) if line.endswith('-') else f'{line} {nxt}'
-            i += 1
-        result.append(line)
-        i += 1
+        elif not prev or (prev.rstrip()[-1] in _SENTENCE_END and not prev.endswith('-') and not curr.lstrip()[0].islower()):
+            result.append(curr)
+        else:
+            result[-1] = (prev[:-1] + curr.lstrip()) if prev.endswith('-') else f'{prev} {curr.lstrip()}'
     return '\n'.join(result)
 
 

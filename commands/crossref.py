@@ -100,9 +100,9 @@ def _resolve_doi_by_title(title: str, md_title: str, cache: dict) -> Optional[st
         return doi
     print('相似度不足，用Crossref标题重试...')
     retry = get_doi_from_citation(crossref_title, cache)
-    verified_doi = retry[0] if retry else None
-    print(f'重试→DOI: {verified_doi or doi}')
-    return verified_doi or doi
+    result = retry[0] if retry else doi
+    print(f'重试→DOI: {result}')
+    return result
 
 
 def process_file(file_path: Path, cache: dict) -> None:
@@ -172,9 +172,9 @@ def process_local_references_in_md(md_path: Path, override_main_doi: Optional[st
 
 
 def _handle_local_mode(raw_input: str, cache: dict) -> None:
-    parts = raw_input.split('doi:', 1)
-    path_part = parts[0].strip()
-    override_main_doi = parts[1].strip() if len(parts) > 1 else None
+    path_part, _, doi_part = raw_input.partition('doi:')
+    path_part = path_part.strip()
+    override_main_doi = doi_part.strip() if doi_part else None
     if override_main_doi and not PATTERN_DOI.match(override_main_doi):
         print(f"警告：提供的DOI格式无效 '{override_main_doi}'，将忽略并使用文件中的DOI。")
         override_main_doi = None

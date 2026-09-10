@@ -188,6 +188,7 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_ca
         content = _replace_urls(content, urls)
     fm, rest = parse_frontmatter_str(content)
     main_doi = get_main_doi(fm, content, all_dois)
+
     if main_doi is None and enable_api_refs and not all_dois:
         result = get_doi_from_citation(fm.get('title', md_dst.stem), crossref_cache)
         main_doi = process_doi(result[0])[0] if result else None
@@ -294,6 +295,17 @@ def _find_extracted_files(temp_dir):
 
 
 
+def _mark_pdf_done(pdf_file_path: Path, trash_dir: Path = None):
+    time.sleep(0.5)
+    try:
+        pdf_file_path.rename(pdf_file_path.parent / f'完成_{pdf_file_path.name}')
+    except Exception:
+        if trash_dir is None:
+            trash_dir = pdf_file_path.parent.parent / 'TRASH'
+        trash_dir.mkdir(exist_ok=True)
+        shutil.move(str(pdf_file_path), str(trash_dir / pdf_file_path.name))
+
+
 def _run_local_batch(pdf_files, path_md0, enable_api_refs,
                      crossref_cache, enable_cited_by, cited_by_max,
                      images_dir, clippings_doi_set, ref_max_age=15):
@@ -320,11 +332,7 @@ def _run_local_batch(pdf_files, path_md0, enable_api_refs,
                 images_dir, clippings_doi_set, ref_max_age,
             )
         if success:
-            time.sleep(0.5)
-            try:
-                pdf_path.rename(pdf_path.parent / f'完成_{pdf_path.name}')
-            except Exception:
-                shutil.move(str(pdf_path), str(pdf_path.parent.parent / 'TRASH' / pdf_path.name))
+            _mark_pdf_done(pdf_path)
         return md_dst.name
 
     with ThreadPoolExecutor(max_workers=min(4, len(pdf_files))) as ex:
@@ -386,11 +394,7 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
                 if _process_md_content(md_dst, json_src, pdf_file_path, enable_api_refs,
                                        crossref_cache, enable_cited_by, cited_by_max,
                                        images_output, clippings_doi_set, ref_max_age):
-                    time.sleep(0.5)
-                    try:
-                        pdf_file_path.rename(pdf_file_path.parent / f'完成_{pdf_file_path.name}')
-                    except Exception:
-                        shutil.move(str(pdf_file_path), str(pdf_file_path.parent.parent / 'TRASH' / pdf_file_path.name))
+                    _mark_pdf_done(pdf_file_path)
         except Exception as e:
             print(f'处理失败: {e}')
         finally:
@@ -425,34 +429,34 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
     print(f'全库已索引: {len(global_index)} 个MD')
     for pdf_file in pdf_files:
         done_path = pdf_file.parent / f'完成_{pdf_file.name}'
-        if done_path.exists():
-            md_path = global_index.get(pdf_file.stem)
-            if md_path and md_path.exists():
-                print(f'[A] 已完成: {pdf_file.name}')
-                if md_path.resolve() == (pm / f'{pdf_file.stem}.md').resolve():
-                    print(f'    MD已就位: {md_path}')
-                else:
-                    print(f'    发现跨vault MD: {md_path.parent.parent.parent.name}')
-                    dst = pm / f'{pdf_file.stem}.md'
-                    if try_copy(md_path, dst):
-                        print(f'    硬链接成功: {dst.name}')
-                    else:
-                        print(f'    硬链接失败(目标已存在)')
-                try:
-                    shutil.move(str(pdf_file), str(trash_dir / pdf_file.name))
-                    print(f'    PDF → TRASH')
-                except Exception as e:
-                    print(f'    PDF移入TRASH失败: {e}')
-            else:
-                print(f'[B] 无MD记录: {pdf_file.name}  重处理中')
-                filtered.append(pdf_file)
-                try:
-                    shutil.move(str(done_path), str(trash_dir / done_path.name))
-                    print(f'    完成标记 → TRASH')
-                except Exception as e:
-                    print(f'    完成标记移入TRASH失败: {e}')
-        else:
+        if not done_path.exists():
             filtered.append(pdf_file)
+            continue
+        md_path = global_index.get(pdf_file.stem)
+        if md_path and md_path.exists():
+            print(f'[A] 已完成: {pdf_file.name}')
+            if md_path.resolve() == (pm / f'{pdf_file.stem}.md').resolve():
+                print(f'    MD已就位: {md_path}')
+            else:
+                print(f'    发现跨vault MD: {md_path.parent.parent.parent.name}')
+                dst = pm / f'{pdf_file.stem}.md'
+                if try_copy(md_path, dst):
+                    print(f'    硬链接成功: {dst.name}')
+                else:
+                    print(f'    硬链接失败(目标已存在)')
+            try:
+                shutil.move(str(pdf_file), str(trash_dir / pdf_file.name))
+                print(f'    PDF → TRASH')
+            except Exception as e:
+                print(f'    PDF移入TRASH失败: {e}')
+        else:
+            print(f'[B] 无MD记录: {pdf_file.name}  重处理中')
+            filtered.append(pdf_file)
+            try:
+                shutil.move(str(done_path), str(trash_dir / done_path.name))
+                print(f'    完成标记 → TRASH')
+            except Exception as e:
+                print(f'    完成标记移入TRASH失败: {e}')
     pdf_files = filtered
     if not pdf_files:
         print('未找到需处理PDF')

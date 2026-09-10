@@ -56,10 +56,6 @@ def _collect_md_files(vault_root: Path) -> List[Path]:
     return result
 
 
-def _stem_map_from_rename(old_stem: str, new_stem: str) -> Dict[str, str]:
-    return {canonicalize_stem(old_stem): new_stem}
-
-
 def run_unify_symbols(vault_root: str = r'C:\Vault', dry_run: bool = True) -> bool:
     vault_root = Path(vault_root)
     changed = _find_changed_files(vault_root)

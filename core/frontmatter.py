@@ -34,11 +34,11 @@ def parse_frontmatter_file(path: Path) -> Tuple[Optional[Dict], str]:
             raw = data.decode(enc).lstrip('\ufeff')
             break
         except UnicodeDecodeError:
-            pass
+            continue
     else:
         raw = data.decode('utf-8', errors='replace')
     fm, rest = parse_frontmatter_str(raw)
-    return (fm if fm else None), rest
+    return fm or None, rest
 
 
 def read_fm(path: Path) -> Tuple[Dict, str]:
@@ -75,12 +75,12 @@ def build_doi_set(md_dir: Path, include_refs: bool = False) -> set:
     existing = set()
     for md_file in md_dir.rglob('*.md'):
         try:
-            fm, body = read_fm(md_file)
+            fm, _ = read_fm(md_file)
         except Exception:
             continue
         if main := extract_doi_from_frontmatter(fm):
             existing.add(main.lower())
-        if include_refs:
+        if include_refs and fm:
             for key in ('reference', 'cited_by'):
                 for ref in fm.get(key, []):
                     if isinstance(ref, str) and (m := PATTERN_DOI.search(ref)):

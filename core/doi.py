@@ -33,7 +33,7 @@ _RE_YEAR_OR_DOTS_TAIL = re.compile(r'\(\d{4}\)\.?$|\.+$')
 
 UNICODE_DASH_TABLE = str.maketrans('\u2010\u2011\u2012\u2013\u2014\u2015\u2212', '-------')
 PDF_ARTIFACTS = str.maketrans('', '', '\u200b\u200c\u200d\ufeff\u00ad\u200e\u200f\u2028\u2029')
-SMART_QUOTE_TABLE = str.maketrans({
+CANONICAL_CHAR_TABLE = str.maketrans({
     '\u2018': '\u201c', '\u2019': '\u201d', '\u201a': '\u201c',
     '\u201b': '\u201c', '\u201c': '\u201c', '\u201d': '\u201d',
     '\u201e': '\u201c', '\u201f': '\u201d', '\u2039': '\u201c',
@@ -42,6 +42,7 @@ SMART_QUOTE_TABLE = str.maketrans({
     '\u2014': '-', '\u2015': '-', '\u2212': '-',
     '\u2026': '...',
 })
+SMART_QUOTE_TABLE = CANONICAL_CHAR_TABLE
 
 
 def repair_doi_text(text: str) -> str:
@@ -88,19 +89,14 @@ MAX_DOI_RAW_LEN = 200
 
 def is_plausible_doi(doi: str) -> bool:
     doi = doi.strip()
-    if PATTERN_PURE_ALPHA_SUFFIX.match(doi):
-        return False
-    if len(doi) > MAX_DOI_RAW_LEN:
-        return False
-    if PATTERN_DOUBLE_DOI.search(doi):
-        return False
-    if PATTERN_EMBEDDED_DOI_LABEL.search(doi):
-        return False
-    if PATTERN_STAT_OR_CI.search(doi):
-        return False
-    if PATTERN_REF_TAIL.search(doi):
-        return False
-    return True
+    return not (
+        PATTERN_PURE_ALPHA_SUFFIX.match(doi)
+        or len(doi) > MAX_DOI_RAW_LEN
+        or PATTERN_DOUBLE_DOI.search(doi)
+        or PATTERN_EMBEDDED_DOI_LABEL.search(doi)
+        or PATTERN_STAT_OR_CI.search(doi)
+        or PATTERN_REF_TAIL.search(doi)
+    )
 
 
 def find_plausible_dois(text: str) -> List[str]:

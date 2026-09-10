@@ -875,23 +875,36 @@ DEFAULT_IMAGE_PATH = Path(r'C:\Vault\IMAGE')
 
 MIT
 
-## 增量对比 (vs v3.1)
+---
 
-| 维度 | v3.1 | v3.2 |
+## 增量对比 (vs v3.2)
+
+| 维度 | v3.2 | v3.2 |
 | --- | --- | --- |
-| **新增文件** | — | `core/pdf_extractor.py`（PDF 工具集中化模块，168 行） |
-| **移除文件** | 无（v3.2 保留 v3.1 全部 23 个 py/toml/md 文件） | — |
-| **README.md** | 811 行 | 876 行 · 两处 tagline 新增「PDF metadata extraction / PDF 元数据提取」；新增中英文 `### pdf_extractor` 章节（函数表）；两处项目结构树新增 `core/pdf_extractor.py`；删除末尾「增量对比 (vs v3.0)」章节（v3.2 不保留历史对比） |
-| **pyproject.toml** | 21 行 | 21 行 · 仅 `description` 变更：`unify-symbols (Unicode→ASCII)` → `pdf_extractor (PyMuPDF/pdfplumber metadata)`；version 仍为 1.0.0 |
-| **core/__init__.py** | 24 行 | 24 行 · 仅 docstring 变更：模块清单加入 `pdf_extractor` |
-| **commands/crossref.py** | 295 行 | 280 行 · 删除 `import pdfplumber`；doi 导入去掉 `UNICODE_DASH_TABLE`；新增 `from core.pdf_extractor import extract_first_doi_from_pdf`；内联 `_extract_doi_from_pdf` 函数移除，`_get_main_doi` 改调 `extract_first_doi_from_pdf`（DOI 加 ≤80 字符过滤） |
-| **commands/pdf2md.py** | 647 行 | 590 行 · 删除 `import multiprocessing`/`import pdfplumber`；`_pdf_extract_task`、`_extract_pdf_dois`、`convert_pdf_to_markdown` 及配套 `_table_to_md`/`_merge_paragraphs`/`_post_process_markdown`/正则常量全部迁移至 core；`_process_md_content` 用 `extract_dois_from_pdf`、`_run_local_batch` 用 `convert_pdf_to_md` |
-| **core/pdf_extractor.py** | —（新增） | 168 行 · `extract_text` / `extract_dois_from_pdf`（spawn 多进程，段落级 `\n`→空格拼接，DOI 长度 ≤80）/ `extract_first_doi_from_pdf` / `table_to_md` / `merge_paragraphs` / `post_process_md` / `convert_pdf_to_md` |
+| **新增文件** | — | 无（两项目 `*.py`/`*.toml`/`*.md` 文件集合完全一致） |
+| **移除文件** | 无（两项目 `*.py`/`*.toml`/`*.md` 文件集合完全一致） | — |
+| **cli.py** | 121 行 · dict `handlers` 分发 · 默认路径内联 | 157 行 · 默认路径提取为模块常量 `_DEFAULT_*` · if/elif 分发 · `_cmd_remove_doi` 被重复定义两次（Bug） |
+| **README.md** | 822 行 · 末尾含「增量对比 (vs v3.1)」章节 | 805 行 · 删除 vs v3.1 对比章节，其余内容不变 |
+| **commands/archive.py** | 111 行 · `_copy_file` 内联 `os.link`/`shutil.copy2` | 106 行 · 删除 `os`/`shutil` 导入 · 改用共享 `core.try_copy` |
+| **commands/cited_by.py** | 108 行 · `_get_main_doi` 内联提取 + `repair_doi_text` 正文回退 | 105 行 · 改名 `_extract_main_doi` · 改用 `core.doi.get_main_doi` · 删除正文回退 |
+| **commands/crossref.py** | 281 行 · `split('doi:', 1)` · 变量 `verified_doi` | 281 行 · `partition('doi:')` · 变量重命名 `result`（行为等价） |
+| **commands/markdown_graph.py** | 222 行 · `+= not` · `cited_by_map` 手动判空 · 先处理引用分支 | 219 行 · `+= int(not)` · `setdefault` · 先处理未处理分支（if/else 对调） |
+| **commands/pdf2md.py** | 529 行 · 内联「完成_」重命名/TRASH 回退逻辑 ×2 处 | 533 行 · 新增 `_mark_pdf_done` 助手 · 完成检测循环改 early-continue |
+| **commands/rename_pdf.py** | 246 行 · block `type` 过滤在循环内 continue · `KEYWORDS_SKIP` tuple | 240 行 · 列表推导过滤 `type==0` · `SKIP_TERMS` frozenset · 过滤条件合并 |
+| **commands/unify_symbols.py** | 117 行 · 含 `_stem_map_from_rename` | 113 行 · 删除未使用的 `_stem_map_from_rename` |
+| **core/crossref_api.py** | 221 行 · 缓存读写内联 · `ref.get('unstructured','')` | 232 行 · 提取 `_lookup_cache`/`_set_cache` 助手 · `if result:` 简化 |
+| **core/doi.py** | 130 行 · `SMART_QUOTE_TABLE` · `is_plausible_doi` 多重 early-return | 126 行 · 更名 `CANONICAL_CHAR_TABLE`（保留 `SMART_QUOTE_TABLE` 别名） · 单表达式 `not (or...)` |
+| **core/frontmatter.py** | 88 行 · `except: pass` · `if include_refs:` | 88 行 · `except: continue` · `fm or None` · `if include_refs and fm:`（防 None） |
+| **core/obsidian_path.py** | 85 行 · `_fuzzy_search` 收集候选列表再排序 | 89 行 · 单遍循环按 mtime 追踪最优候选（省一次列表分配） |
+| **core/pdf_extractor.py** | 168 行 · `separator` 提前构造 · `merge_paragraphs` while 循环 | 160 行 · `separator` 延迟构造 · `merge_paragraphs` 改 for + `result[-1]` |
+| **core/refs.py** | 143 行 · 本地 `_CANONICAL_MAP`/`_CANONICAL_TABLE` · `list(variants)` | 135 行 · 复用 `core.doi.CANONICAL_CHAR_TABLE` · `tuple(variants)` · `wikilink_doi` 简化 |
 
 ### 关键变化
 
-- **新增 `core/pdf_extractor.py`（本轮唯一新文件）**：将 pdfplumber 相关逻辑从 `pdf2md.py`（本地转换）与 `crossref.py`（PDF 主 DOI 提取）抽离为统一核心模块，同时导出首页 DOI 提取、多进程安全 DOI 提取、表格→Markdown、段落合并、标题后处理与完整 PDF→MD 转换。
-- **PDF 本地转换整体迁移**：`pdf2md --local` 的 `convert_pdf_to_markdown` 移入 core 改名为 `convert_pdf_to_md`；原模块内 `_table_to_md`、`_merge_paragraphs`、`_post_process_markdown` 及正则常量全部删除，改由 core 提供。
-- **DOI 提取统一并加长过滤**：`extract_dois_from_pdf` 沿用 v3.1 的 spawn 多进程 + 60s 超时设计，但改为按空行分段、段内 `\n`→空格后匹配；`extract_first_doi_from_pdf` 取代 `crossref.py` 内联 `_extract_doi_from_pdf`；两者均新增 `_MAX_DOI_LEN = 80` 长度过滤。
-- **import 精简**：`pdf2md.py` 与 `crossref.py` 移除直接依赖的 `pdfplumber`/`multiprocessing`，改经 core 引用。
-- **README**：中英文 tagline 与项目结构树同步标注 `pdf_extractor`；中英文各新增 pdf_extractor 函数说明表；移除 v3.1 末尾「增量对比 (vs v3.0)」章节（README 不保存超过一轮的历史对比）。
+- **无文件新增/移除**：v3.2 与 v3.2 的 23 个源文件（`*.py`/`*.toml`/`*.md`）路径与数量完全一致，本轮全部为原地修改；未变化的 10 个文件：`config.py`、`pyproject.toml`、`commands/clean_images.py`、`commands/match.py`、`commands/reconcile.py`、`commands/remove_doi.py`、`commands/trash.py`、`commands/__init__.py`、`core/markdown_utils.py`、`core/__init__.py`。
+- **cli.py 引入重复函数 Bug**：`_cmd_remove_doi` 被定义两次（`cli.py:37-47` 与 `cli.py:50-60`），后者覆盖前者；同时默认路径内联常量提取为模块级 `_DEFAULT_*`，dispatch 由 dict 改为 if/elif 链。
+- **DOI/引用逻辑收敛**：`cited_by.py` 放弃正文 `repair_doi_text` 回退改用 `core.doi.get_main_doi`；`refs.py` 删除本地 `_CANONICAL_MAP`，统一复用 `core.doi.CANONICAL_CHAR_TABLE`（`doi.py` 的 `SMART_QUOTE_TABLE` 更名并保留别名）。
+- **文件复制/PDF 完成逻辑集中**：`archive.py` 删除 `os`/`shutil` 直连改用 `core.try_copy`；`pdf2md.py` 把两处内联的「重命名 `完成_` 前缀 / 移入 TRASH」收敛为 `_mark_pdf_done` 助手。
+- **行为等价重构为主**：`markdown_graph.py`（if/else 分支对调、`setdefault`、`+= int(not)`）、`crossref.py`（`partition`）、`obsidian_path.py`（单遍 mtime 最优）、`pdf_extractor.py`（`merge_paragraphs` 重写、`separator` 延迟构造）、`doi.py`/`crossref_api.py`（表达式化与缓存助手抽取）均无功能变化。
+- **防御性修正**：`frontmatter.py` 的 `build_doi_set` 增加 `if include_refs and fm`（防 `fm` 为 None）；`rename_pdf.py` 将 `KEYWORDS_SKIP` 改为 frozenset `SKIP_TERMS` 并合并过滤条件。
+- **README**：仅删除 v3.2 末尾「增量对比 (vs v3.1)」章节，其余 805 行与 v3.2 完全一致。

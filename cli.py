@@ -15,17 +15,36 @@ from commands.clean_images import run_clean_images
 from commands.reconcile import run_reconcile
 from commands.unify_symbols import run_unify_symbols
 
+_DEFAULT_PDF = r'C:\Vault\PDF'
+_DEFAULT_MD = r'C:\Vault\PENDING\Clippings'
+_DEFAULT_IMG = r'C:\Vault\IMAGE'
+_DEFAULT_ZIP = r'C:\Vault\ZIP'
+_DEFAULT_VAULT = r'C:\Vault'
+
 
 def _add_api_args(parser, with_zip=True):
-    parser.add_argument('--path_pdf', default=r'C:\Vault\PDF')
-    parser.add_argument('--path_md0', default=r'C:\Vault\PENDING\Clippings')
-    parser.add_argument('--path_images', default=r'C:\Vault\IMAGE')
+    parser.add_argument('--path_pdf', default=_DEFAULT_PDF)
+    parser.add_argument('--path_md0', default=_DEFAULT_MD)
+    parser.add_argument('--path_images', default=_DEFAULT_IMG)
     if with_zip:
-        parser.add_argument('--path_zip', default=r'C:\Vault\ZIP')
+        parser.add_argument('--path_zip', default=_DEFAULT_ZIP)
     parser.add_argument('--enable_api_references', action='store_true', default=True)
     parser.add_argument('--enable_cited_by', action='store_true', default=True)
     parser.add_argument('--cited_by_max', type=int, default=10)
     parser.add_argument('--ref_max_age', type=int, default=15)
+
+
+def _cmd_remove_doi(args):
+    doi = args.doi or input('输入要移除的错误DOI: ').strip()
+    if not doi:
+        print('未输入DOI')
+        return
+    modified = run_remove_doi(args.path, doi)
+    if modified:
+        for p, c in modified:
+            print(f'  [{c}行] {p.name}')
+    else:
+        print('未找到匹配')
 
 
 def _cmd_remove_doi(args):
@@ -95,26 +114,43 @@ def main():
         parser.print_help()
         return
 
-    handlers = {
-        'pdf2md': lambda: run_pdf2md(args.path_pdf, getattr(args, 'path_zip', None), args.path_md0,
-                                     args.enable_api_references, args.enable_cited_by, args.cited_by_max,
-                                     local=False, path_images=args.path_images, ref_max_age=args.ref_max_age),
-        'pdf2md-local': lambda: run_pdf2md(args.path_pdf, getattr(args, 'path_zip', None), args.path_md0,
-                                           args.enable_api_references, args.enable_cited_by, args.cited_by_max,
-                                           local=True, path_images=args.path_images, ref_max_age=args.ref_max_age),
-        'markdown': lambda: run_markdown_graph(args.path),
-        'crossref': lambda: crossref_handle(args.input) if args.input else run_crossref_interactive(),
-        'match': lambda: run_match(args.base_dir, args.dry_run, args.threshold, args.force, args.verbose),
-        'trash': lambda: run_trash(args.path),
-        'remove-doi': lambda: _cmd_remove_doi(args),
-        'cited-by': lambda: run_cited_by_interactive() if args.path == '-' else run_cited_by(args.path, args.max),
-        'archive': lambda: run_archive(args.source, args.target),
-        'rename-pdf': lambda: run_rename_pdf(args.directory),
-        'clean-images': lambda: run_clean_images(),
-        'reconcile': lambda: run_reconcile(dry_run=not args.force),
-        'unify-symbols': lambda: run_unify_symbols(args.vault, dry_run=not args.force),
-    }
-    handlers.get(args.command, lambda: None)()
+    cmd = args.command
+    if cmd == 'pdf2md':
+        run_pdf2md(args.path_pdf, getattr(args, 'path_zip', None), args.path_md0,
+                   args.enable_api_references, args.enable_cited_by, args.cited_by_max,
+                   local=False, path_images=args.path_images, ref_max_age=args.ref_max_age)
+    elif cmd == 'pdf2md-local':
+        run_pdf2md(args.path_pdf, getattr(args, 'path_zip', None), args.path_md0,
+                   args.enable_api_references, args.enable_cited_by, args.cited_by_max,
+                   local=True, path_images=args.path_images, ref_max_age=args.ref_max_age)
+    elif cmd == 'markdown':
+        run_markdown_graph(args.path)
+    elif cmd == 'crossref':
+        if args.input:
+            crossref_handle(args.input)
+        else:
+            run_crossref_interactive()
+    elif cmd == 'match':
+        run_match(args.base_dir, args.dry_run, args.threshold, args.force, args.verbose)
+    elif cmd == 'trash':
+        run_trash(args.path)
+    elif cmd == 'remove-doi':
+        _cmd_remove_doi(args)
+    elif cmd == 'cited-by':
+        if args.path == '-':
+            run_cited_by_interactive()
+        else:
+            run_cited_by(args.path, args.max)
+    elif cmd == 'archive':
+        run_archive(args.source, args.target)
+    elif cmd == 'rename-pdf':
+        run_rename_pdf(args.directory)
+    elif cmd == 'clean-images':
+        run_clean_images()
+    elif cmd == 'reconcile':
+        run_reconcile(dry_run=not args.force)
+    elif cmd == 'unify-symbols':
+        run_unify_symbols(args.vault, dry_run=not args.force)
 
 
 if __name__ == '__main__':
