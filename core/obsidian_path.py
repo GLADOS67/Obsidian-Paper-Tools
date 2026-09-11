@@ -38,30 +38,26 @@ def _fuzzy_search(dir_path: Path, stem_raw: str) -> Optional[Path]:
     if not dir_path.exists() or not stem_raw:
         return None
     stem_lower = stem_raw.lower()
+    safe_stem = re.sub(r'([\[\]*?])', r'[\1]', stem_raw)
+    best, best_mtime = None, 0.0
     try:
-        best, best_mtime = None, 0
-        safe_stem = re.sub(r'([\[\]*?])', r'[\1]', stem_raw)
         for p in dir_path.glob(f'{safe_stem}*.md'):
             p_stem_lower = p.stem.lower()
-            if p_stem_lower == stem_lower:
-                mtime = p.stat().st_mtime
-                if mtime > best_mtime:
-                    best, best_mtime = p, mtime
-                continue
-            sm = SequenceMatcher(None, stem_lower, p_stem_lower)
-            if sm.quick_ratio() >= SM_QUICK and sm.ratio() >= SM_QUICK:
-                mtime = p.stat().st_mtime
-                if mtime > best_mtime:
-                    best, best_mtime = p, mtime
-        return best
+            if p_stem_lower != stem_lower:
+                sm = SequenceMatcher(None, stem_lower, p_stem_lower)
+                if sm.quick_ratio() < SM_QUICK or sm.ratio() < SM_QUICK:
+                    continue
+            mtime = p.stat().st_mtime
+            if mtime > best_mtime:
+                best, best_mtime = p, mtime
     except Exception:
         return None
+    return best
 
 
 def _fallback_search(file_clean: str) -> Optional[Path]:
     basename = Path(file_clean).name
-    name_stem = Path(basename).stem
-    for name in (basename, name_stem):
+    for name in dict.fromkeys((basename, Path(basename).stem)):
         try:
             matches = sorted(OBSIDIAN_ROOT.rglob(f'{name}.md'), key=lambda p: p.stat().st_mtime, reverse=True)
             if matches:

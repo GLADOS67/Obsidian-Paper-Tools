@@ -20,15 +20,13 @@ def _extract_clippings_doi(fm: dict) -> Optional[str]:
     refs = fm.get('reference', [])
     if refs and isinstance(refs[0], str):
         m = WIKILINK_RE.search(refs[0].replace('\n', ' '))
-        if m:
-            doi_match = DOI_RE.search(m.group(2) or m.group(1))
-            if doi_match:
-                return doi_match.group(0).lower()
+        if m and (doi_match := DOI_RE.search(m.group(2) or m.group(1))):
+            return doi_match.group(0).lower()
     doi_val = fm.get('doi')
     if isinstance(doi_val, list) and doi_val:
         doi_val = doi_val[0]
-    return (DOI_RE.search(doi_val).group(0).lower()
-            if isinstance(doi_val, str) and DOI_RE.search(doi_val) else None)
+    return (dm.group(0).lower()
+            if isinstance(doi_val, str) and (dm := DOI_RE.search(doi_val)) else None)
 
 
 def _jaccard(a: set, b: set) -> float:
@@ -39,13 +37,8 @@ def _jaccard(a: set, b: set) -> float:
     return inter / union if union else 0.0
 
 
-def _chinese_title_from_h1(md_path: Path) -> Optional[str]:
-    try:
-        text = md_path.read_text(encoding='utf-8')
-    except Exception:
-        return None
-    parsed = parse_h1_wikilink(text)
-    if parsed:
+def _chinese_title_from_text(text: str) -> Optional[str]:
+    if parsed := parse_h1_wikilink(text):
         return parsed[1]
     for line in text.split('\n'):
         stripped = line.lstrip('#').strip()
@@ -68,8 +61,18 @@ def _fuzzy_best(stem: str, candidates: Dict[str, Path],
     return (best, best_score) if best and best_score >= threshold else None
 
 
+def _pa_by_doi(pa_index: Dict[str, Path], pa_text: Dict[str, str],
+               pa_alias: Dict[str, str], doi: str) -> Tuple[Optional[Path], Optional[str], str]:
+    """在索引时缓存的 PA 正文(小写)中查找包含该 DOI 的文件，避免重复 IO。"""
+    for pa_stem, text in pa_text.items():
+        if doi in text:
+            return pa_index[pa_stem], pa_alias.get(pa_stem), 'doi'
+    return None, None, ''
+
+
 def _match_pa(clip_md: Path, fm: dict, pa_index: Dict[str, Path],
-              pa_reverse: Dict[str, Tuple[Path, str]], force: bool,
+              pa_reverse: Dict[str, Tuple[Path, str]], pa_text: Dict[str, str],
+              pa_alias: Dict[str, str], force: bool,
               clippings_doi_cache: Optional[str] = None):
     existing = fm.get('paper-analyze')
     if existing and not force:
@@ -84,39 +87,22 @@ def _match_pa(clip_md: Path, fm: dict, pa_index: Dict[str, Path],
     else:
         pa_path = pa_index.get(underscore_stem)
         if pa_path:
-            alias = _chinese_title_from_h1(pa_path)
-            method = 'filename'
+            alias, method = pa_alias.get(pa_path.stem), 'filename'
         else:
             doi = _extract_clippings_doi(fm) if clippings_doi_cache is None else clippings_doi_cache
-            if doi:
-                pa_path, alias, method = _pa_by_doi(pa_index, doi)
-            else:
-                pa_path, alias, method = None, None, ''
-        if not pa_path:
-            result = _fuzzy_best(underscore_stem, pa_index)
-            if result:
-                pa_path, method = result[0], 'fuzzy'
-                alias = _chinese_title_from_h1(pa_path)
+            pa_path, alias, method = (_pa_by_doi(pa_index, pa_text, pa_alias, doi)
+                                      if doi else (None, None, ''))
+        if not pa_path and (result := _fuzzy_best(underscore_stem, pa_index)):
+            pa_path, method = result[0], 'fuzzy'
+            alias = pa_alias.get(pa_path.stem)
 
     if not pa_path:
-        return ('failed', None) if not existing else ('skipped', None), None
-    if existing and (LINK_TARGET_RE.search(str(existing)).group(1).strip()
-                     if LINK_TARGET_RE.search(str(existing)) else None) == pa_path.stem:
+        return ('failed' if not existing else 'skipped'), None
+    if existing and (m := LINK_TARGET_RE.search(str(existing))) and m.group(1).strip() == pa_path.stem:
         return 'skipped', None
-    link = f'[[{pa_path.stem}|{alias}]]' if alias else f'[[{pa_path.stem}]]'
-    fm['paper-analyze'] = link
+    fm['paper-analyze'] = f'[[{pa_path.stem}|{alias}]]' if alias else f'[[{pa_path.stem}]]'
     print(f'[PA] {method:10s}  {clip_md.name} -> {pa_path.name}')
     return 'matched', pa_path
-
-
-def _pa_by_doi(pa_index: Dict[str, Path], doi: str) -> Tuple[Optional[Path], Optional[str], str]:
-    for pa_stem, pa_p in pa_index.items():
-        try:
-            if doi in pa_p.read_text(encoding='utf-8').lower():
-                return pa_p, _chinese_title_from_h1(pa_p), 'doi'
-        except Exception:
-            continue
-    return None, None, ''
 
 
 def _match_fe(clip_md: Path, fm: dict, fe_index: Dict[str, Path],
@@ -130,27 +116,42 @@ def _match_fe(clip_md: Path, fm: dict, fe_index: Dict[str, Path],
     rev = fe_reverse.get(underscore_stem)
     if rev:
         fe_path, alias, method = rev[0], rev[1], 'reverse'
+    elif fe_path := fe_index.get(underscore_stem):
+        alias, method = None, 'filename'
+    elif result := _fuzzy_best(underscore_stem + '_figures', fe_index):
+        fe_path, alias, method = result[0], None, 'fuzzy'
     else:
-        fe_path = fe_index.get(underscore_stem)
-        if fe_path:
-            alias, method = None, 'filename'
-        else:
-            result = _fuzzy_best(underscore_stem + '_figures', {k: v for k, v in fe_index.items()})
-            if result:
-                fe_path, method = result[0], 'fuzzy'
-                alias = None
-            else:
-                fe_path, alias, method = None, None, ''
+        fe_path = None
 
     if not fe_path:
-        return ('failed', None) if not existing else ('skipped', None), None
-    if existing and (LINK_TARGET_RE.search(str(existing)).group(1).strip()
-                     if LINK_TARGET_RE.search(str(existing)) else None) == fe_path.stem:
+        return ('failed' if not existing else 'skipped'), None
+    if existing and (m := LINK_TARGET_RE.search(str(existing))) and m.group(1).strip() == fe_path.stem:
         return 'skipped', None
-    link = f'[[{fe_path.stem}|{alias}]]' if alias else f'[[{fe_path.stem}]]'
-    fm['figure-extractor'] = link
+    fm['figure-extractor'] = f'[[{fe_path.stem}|{alias}]]' if alias else f'[[{fe_path.stem}]]'
     print(f'[FE] {method:10s}  {clip_md.name} -> {fe_path.name}')
     return 'matched', fe_path
+
+
+def _find_chi(clip_md: Path, fm: dict, chi_reverse: Dict[str, Tuple[Path, str]],
+              by_source: Dict[str, Path], by_first_ref: Dict[str, Path],
+              chi_doi_sets: Dict[Path, set], threshold: float):
+    """按 reverse → source → first_ref → jaccard 顺序定位 Chi 笔记。"""
+    rev = chi_reverse.get(clip_md.stem)
+    if rev:
+        return rev[0], rev[1], 'reverse', 1.0
+    clip_src = (fm.get('source') or '').strip().lower().rstrip('/')
+    if clip_src in by_source:
+        return by_source[clip_src], None, 'source', 1.0
+    clip_fr = first_ref_target(fm.get('reference', []))
+    if clip_fr in by_first_ref:
+        return by_first_ref[clip_fr], None, 'first_ref', 1.0
+    clip_dois = extract_doi_set(fm.get('reference', []))
+    score, chi_path = 0.0, None
+    for chi_p, chi_dois in chi_doi_sets.items():
+        s = _jaccard(clip_dois, chi_dois)
+        if s > score:
+            score, chi_path = s, chi_p
+    return (chi_path, None, 'jaccard', score) if score >= threshold else (None, None, '', score)
 
 
 def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_THRESHOLD,
@@ -199,6 +200,7 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     pa_reverse: Dict[str, Tuple[Path, str]] = {}
     fe_reverse: Dict[str, Tuple[Path, str]] = {}
     pa_alias: Dict[str, str] = {}
+    pa_text: Dict[str, str] = {}
 
     claude_dir = base / 'Claude'
     if claude_dir.is_dir():
@@ -208,19 +210,19 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
                 continue
             if stem.endswith('_figures'):
                 fe_index[stem[:-8]] = md
-            else:
-                pa_index[stem] = md
-                try:
-                    h1_info = parse_h1_wikilink(md.read_text(encoding='utf-8'))
-                except Exception:
-                    h1_info = None
-                if h1_info:
-                    clip_stem, ch_title = h1_info
-                    pa_reverse[clip_stem] = (md, ch_title)
-                    pa_reverse[clip_stem.replace('_', ' ')] = (md, ch_title)
-                ch = _chinese_title_from_h1(md)
-                if ch:
-                    pa_alias[md.stem] = ch
+                continue
+            pa_index[stem] = md
+            try:
+                text = md.read_text(encoding='utf-8')
+            except Exception:
+                text = ''
+            pa_text[stem] = text.lower()
+            if h1_info := parse_h1_wikilink(text):
+                clip_stem, ch_title = h1_info
+                pa_reverse[clip_stem] = (md, ch_title)
+                pa_reverse[clip_stem.replace('_', ' ')] = (md, ch_title)
+            if ch := _chinese_title_from_text(text):
+                pa_alias[stem] = ch
 
     for fe_stem, fe_path in fe_index.items():
         space_stem = fe_stem.replace('_', ' ')
@@ -256,30 +258,10 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
         if existing_pt and not force:
             stats['pt']['skipped'] += 1
         else:
-            clip_src = (fm.get('source') or '').strip().lower().rstrip('/')
-            clip_fr = first_ref_target(fm.get('reference', []))
-            chi_path, method, score, chi_alias = None, '', 0.0, None
-
-            rev = chi_reverse.get(clip_md.stem)
-            if rev:
-                chi_path, chi_alias, method, score = rev[0], rev[1], 'reverse', 1.0
-            elif clip_src in by_source:
-                chi_path, chi_alias, method, score = by_source[clip_src], None, 'source', 1.0
-            elif clip_fr in by_first_ref:
-                chi_path, chi_alias, method, score = by_first_ref[clip_fr], None, 'first_ref', 1.0
-            else:
-                clip_dois = extract_doi_set(fm.get('reference', []))
-                for chi_p, chi_dois in chi_doi_sets.items():
-                    s = _jaccard(clip_dois, chi_dois)
-                    if s > score:
-                        score, chi_path = s, chi_p
-                if score >= threshold:
-                    method = 'jaccard'
-                else:
-                    chi_path = None
-
-            if chi_path and existing_pt and (LINK_TARGET_RE.search(str(existing_pt)).group(1).strip()
-                                             if LINK_TARGET_RE.search(str(existing_pt)) else '') == chi_path.stem:
+            chi_path, chi_alias, method, score = _find_chi(
+                clip_md, fm, chi_reverse, by_source, by_first_ref, chi_doi_sets, threshold)
+            if (chi_path and existing_pt and (m := LINK_TARGET_RE.search(str(existing_pt)))
+                    and m.group(1).strip() == chi_path.stem):
                 stats['pt']['skipped'] += 1
             elif chi_path:
                 display = chi_alias or chi_display.get(chi_path) or chi_path.stem
@@ -291,6 +273,7 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
             elif not existing_pt:
                 stats['pt']['failed'] += 1
                 if verbose:
+                    clip_dois = extract_doi_set(fm.get('reference', []))
                     print(f'[PT] FAIL: {clip_md.name}')
                     for cand_p, cand_s in sorted(
                         ((p, _jaccard(clip_dois, d)) for p, d in chi_doi_sets.items()),
@@ -301,7 +284,8 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
                 stats['pt']['skipped'] += 1
 
         clip_doi_value = _extract_clippings_doi(fm)
-        pa_result, pa_path = _match_pa(clip_md, fm, pa_index, pa_reverse, force, clip_doi_value)
+        pa_result, pa_path = _match_pa(clip_md, fm, pa_index, pa_reverse, pa_text,
+                                       pa_alias, force, clip_doi_value)
         stats['pa']['matched'] += pa_result == 'matched'
         stats['pa']['skipped'] += pa_result == 'skipped'
         stats['pa']['failed'] += pa_result == 'failed'

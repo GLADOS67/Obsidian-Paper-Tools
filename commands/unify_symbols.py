@@ -2,27 +2,32 @@
 
 import re
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, Iterator, List, Tuple
 
 from core import is_vault_dir
 from core.refs import canonicalize_stem
 
 _WIKILINK_RE = re.compile(r'\[\[([^|#\]\n]+)([|#][^\]\n]*)?\]\]')
+_SUBDIRS = ('Claude', 'Chi', 'Clippings')
+
+
+def _iter_subdirs(vault_root: Path) -> Iterator[Path]:
+    for vault_dir in sorted(vault_root.iterdir()):
+        if not is_vault_dir(vault_dir):
+            continue
+        for sub in _SUBDIRS:
+            sd = vault_dir / sub
+            if sd.is_dir():
+                yield sd
 
 
 def _find_changed_files(vault_root: Path) -> Dict[str, str]:
     changed: Dict[str, str] = {}
-    for vault_dir in sorted(vault_root.iterdir()):
-        if not is_vault_dir(vault_dir):
-            continue
-        for sub in ('Claude', 'Chi', 'Clippings'):
-            sd = vault_dir / sub
-            if not sd.is_dir():
-                continue
-            for md in sorted(sd.rglob('*.md')):
-                norm = canonicalize_stem(md.stem)
-                if norm != md.stem:
-                    changed[md.stem] = norm
+    for sd in _iter_subdirs(vault_root):
+        for md in sorted(sd.rglob('*.md')):
+            norm = canonicalize_stem(md.stem)
+            if norm != md.stem:
+                changed[md.stem] = norm
     return changed
 
 
@@ -45,14 +50,8 @@ def _fix_wikilinks(content: str, stem_map: Dict[str, str]) -> Tuple[str, int]:
 
 def _collect_md_files(vault_root: Path) -> List[Path]:
     result: List[Path] = []
-    for vault_dir in sorted(vault_root.iterdir()):
-        if not is_vault_dir(vault_dir):
-            continue
-        for sub in ('Claude', 'Chi', 'Clippings'):
-            sd = vault_dir / sub
-            if not sd.is_dir():
-                continue
-            result.extend(sorted(sd.rglob('*.md')))
+    for sd in _iter_subdirs(vault_root):
+        result.extend(sorted(sd.rglob('*.md')))
     return result
 
 
@@ -93,21 +92,15 @@ def run_unify_symbols(vault_root: str = r'C:\Vault', dry_run: bool = True) -> bo
 
     renames = 0
     for old_stem, new_stem in sorted(changed.items()):
-        for vault_dir in sorted(vault_root.iterdir()):
-            if not is_vault_dir(vault_dir):
-                continue
-            for sub in ('Claude', 'Chi', 'Clippings'):
-                sd = vault_dir / sub
-                if not sd.is_dir():
-                    continue
-                for md in sorted(sd.rglob(f'{old_stem}.md')):
-                    new_path = md.with_name(f'{new_stem}{md.suffix}')
-                    try:
-                        md.rename(new_path)
-                        renames += 1
-                        print(f'  RENAME {md.relative_to(vault_root)}')
-                    except Exception as e:
-                        print(f'  重命名失败 {md}: {e}')
+        for sd in _iter_subdirs(vault_root):
+            for md in sorted(sd.rglob(f'{old_stem}.md')):
+                new_path = md.with_name(f'{new_stem}{md.suffix}')
+                try:
+                    md.rename(new_path)
+                    renames += 1
+                    print(f'  RENAME {md.relative_to(vault_root)}')
+                except Exception as e:
+                    print(f'  重命名失败 {md}: {e}')
 
     print(f'\n完成: {renames} 个文件重命名, {total_links} 个链接更新')
     return True

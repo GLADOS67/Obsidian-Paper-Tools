@@ -7,10 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.crossref_api import get_cited_by_pubmed, load_cache, save_cache
-from core.doi import (
-    PATTERN_DOI, doi_from_doi_line, extract_doi_from_frontmatter,
-    get_main_doi, make_wikilink, process_doi,
-)
+from core.doi import PATTERN_DOI, get_main_doi, make_wikilink, process_doi
 from core.frontmatter import (
     build_doi_set, cited_by_fresh, dump_frontmatter, parse_frontmatter_str,
 )
@@ -19,16 +16,15 @@ from core.refs import wikilink_doi
 
 
 def _extract_main_doi(fm: dict, body: str) -> Optional[str]:
-    doi = get_main_doi(fm, body)
-    if doi:
+    if doi := get_main_doi(fm, body):
         return doi
     refs = fm.get('reference', [])
-    if refs and isinstance(refs[0], str):
-        doi = wikilink_doi(refs[0])
-        if not doi:
-            m = PATTERN_DOI.search(refs[0].split('|', 1)[-1])
-            doi = process_doi(m.group(0))[0] if m else None
-    return doi
+    if not (refs and isinstance(refs[0], str)):
+        return None
+    if doi := wikilink_doi(refs[0]):
+        return doi
+    m = PATTERN_DOI.search(refs[0].split('|', 1)[-1])
+    return process_doi(m.group(0))[0] if m else None
 
 
 def _process_cited_file(md_file: Path, cache: dict, existing: set,

@@ -1,7 +1,7 @@
 """/s: Remove wrong DOI wikilinks from Obsidian Vault .md files."""
 
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
+from itertools import repeat
 from pathlib import Path
 
 from core.doi import make_wikilink
@@ -26,15 +26,5 @@ def _process_one(md_file: Path, wikilink: str) -> tuple:
 def run_remove_doi(directory: str, doi: str) -> list:
     target = Path(directory)
     wikilink = make_wikilink(doi)
-    modified = []
-    lock = threading.Lock()
-    md_files = list(target.rglob('*.md'))
-
     with ThreadPoolExecutor() as ex:
-        futures = {ex.submit(_process_one, f, wikilink): f for f in md_files}
-        for fut in as_completed(futures):
-            result = fut.result()
-            if result:
-                with lock:
-                    modified.append(result)
-    return modified
+        return [r for r in ex.map(_process_one, target.rglob('*.md'), repeat(wikilink)) if r]

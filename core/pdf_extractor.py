@@ -57,16 +57,13 @@ def extract_dois_from_pdf(pdf_path, timeout=60):
         p.close()
         if not pages:
             return set()
-
-        dois = set()
-        for page_text in pages:
-            sections = re.split(r'\n\s*\n', page_text)
-            for section in sections:
-                section = section.replace('\n', ' ')
-                for d in find_plausible_dois(repair_doi_text(section)):
-                    if len(d) <= _MAX_DOI_LEN:
-                        dois.add(d)
-        return dois
+        return {
+            d
+            for page_text in pages
+            for section in re.split(r'\n\s*\n', page_text)
+            for d in find_plausible_dois(repair_doi_text(section.replace('\n', ' ')))
+            if len(d) <= _MAX_DOI_LEN
+        }
     except Exception as e:
         print(f'从PDF提取DOI失败 {pdf_path.name}: {e}')
     return set()
@@ -112,11 +109,11 @@ def table_to_md(table):
 def merge_paragraphs(text):
     lines = text.split('\n')
     result = [lines[0].rstrip()] if lines else []
-    for i in range(1, len(lines)):
-        curr, prev = lines[i].rstrip(), result[-1]
+    for line in lines[1:]:
+        curr, prev = line.rstrip(), result[-1]
         if not curr:
             result.append('')
-        elif not prev or (prev.rstrip()[-1] in _SENTENCE_END and not prev.endswith('-') and not curr.lstrip()[0].islower()):
+        elif not prev or (prev[-1] in _SENTENCE_END and not prev.endswith('-') and not curr.lstrip()[0].islower()):
             result.append(curr)
         else:
             result[-1] = (prev[:-1] + curr.lstrip()) if prev.endswith('-') else f'{prev} {curr.lstrip()}'

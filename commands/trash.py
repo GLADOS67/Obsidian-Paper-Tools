@@ -3,21 +3,16 @@
 import os
 import shutil
 import zipfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
-from commands.clean_images import _scan_one
+from commands.clean_images import move_images_to, scan_referenced_images
 from config import DEFAULT_IMAGE_PATH, DEFAULT_ZIP_PATH, OBSIDIAN_ROOT
 
 
 def _scan_referenced(vault: Path) -> set:
     md_files = list(vault.rglob('*.md'))
-    referenced = set()
-    with ThreadPoolExecutor() as ex:
-        futures = [ex.submit(_scan_one, p) for p in md_files]
-        for fut in as_completed(futures):
-            referenced.update(fut.result())
+    referenced = scan_referenced_images(md_files)
     print(f'扫描MD: {len(md_files)}, 引用图片: {len(referenced)}')
     return referenced
 
@@ -28,14 +23,7 @@ def _trash_unreferenced(images_dir: Path, referenced: set, trash_dir: Path) -> N
     if not unreferenced:
         print('无冗余图片')
         return
-    trash_dir.mkdir(parents=True, exist_ok=True)
-    moved = 0
-    for name in unreferenced:
-        try:
-            shutil.move(str(images_dir / name), str(trash_dir / name))
-            moved += 1
-        except Exception:
-            pass
+    moved = move_images_to(unreferenced, images_dir, trash_dir)
     print(f'冗余图片移入 {trash_dir}: {moved}/{len(unreferenced)}')
 
 

@@ -38,7 +38,6 @@ def _copy_file(src: Path, dst: Path) -> str:
         return 'not found'
     if dst.exists():
         return 'exists'
-    from core import try_copy
     return 'hardlinked' if try_copy(src, dst) else 'copied'
 
 

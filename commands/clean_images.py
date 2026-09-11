@@ -3,7 +3,7 @@
 import os
 import re
 import shutil
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from config import DEFAULT_IMAGE_PATH, OBSIDIAN_ROOT
@@ -30,6 +30,31 @@ def _scan_one(md_path: Path) -> set:
         return set()
 
 
+def scan_referenced_images(md_files, show_progress: bool = False) -> set:
+    """并行扫描 .md 文件，返回被引用的本地图片文件名集合。"""
+    md_files = list(md_files)
+    referenced = set()
+    with ThreadPoolExecutor() as ex:
+        for i, names in enumerate(ex.map(_scan_one, md_files), 1):
+            referenced.update(names)
+            if show_progress and i % 200 == 0:
+                print(f'  进度: {i}/{len(md_files)}')
+    return referenced
+
+
+def move_images_to(names, images_dir: Path, trash_dir: Path) -> int:
+    """将 names 中的图片从 images_dir 移入 trash_dir，返回移动成功数。"""
+    trash_dir.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for name in names:
+        try:
+            shutil.move(str(images_dir / name), str(trash_dir / name))
+            moved += 1
+        except Exception:
+            pass
+    return moved
+
+
 def run_clean_images(path_vault=None, path_images=None, path_trash=None):
     vault = Path(path_vault or OBSIDIAN_ROOT)
     images_dir = Path(path_images or DEFAULT_IMAGE_PATH)
@@ -40,15 +65,7 @@ def run_clean_images(path_vault=None, path_images=None, path_trash=None):
 
     md_files = list(vault.rglob('*.md'))
     print(f'扫描MD文件: {len(md_files)}')
-
-    referenced = set()
-    with ThreadPoolExecutor() as ex:
-        futures = [ex.submit(_scan_one, p) for p in md_files]
-        for i, fut in enumerate(as_completed(futures), 1):
-            referenced.update(fut.result())
-            if i % 200 == 0:
-                print(f'  进度: {i}/{len(md_files)}')
-
+    referenced = scan_referenced_images(md_files, show_progress=True)
     print(f'已引用图片: {len(referenced)}')
 
     unreferenced = actual_files - referenced
@@ -57,13 +74,5 @@ def run_clean_images(path_vault=None, path_images=None, path_trash=None):
     if not unreferenced:
         print('无冗余图片')
         return
-
-    trash_dir.mkdir(parents=True, exist_ok=True)
-    moved = 0
-    for name in unreferenced:
-        try:
-            shutil.move(str(images_dir / name), str(trash_dir / name))
-            moved += 1
-        except Exception:
-            pass
+    moved = move_images_to(unreferenced, images_dir, trash_dir)
     print(f'已移入TRASH: {moved}/{len(unreferenced)}')

@@ -4,7 +4,7 @@
 
 ---
 
-# Obsidian-Paper-Tools 3.2 — 织命者卡洛斯
+# Obsidian-Paper-Tools 3.3 — 织命者卡洛斯
 
 > Obsidian. Our Vault. 🔗 Links. 🧠 Graph. 📂 Open formats.
 > Our way of research.
@@ -36,7 +36,7 @@
 >
 > BECOME A VAULTTOOLER.
 >
-> *— Cloud & local PDF-to-Markdown · PDF metadata extraction · Image GC · Reconcile PA/PT/FE links · DOI citation graph · PubMed API · Unicode symbol unification · note matching & archiving*
+> *— Cloud & local PDF-to-Markdown · PDF metadata extraction · Image GC · Reconcile PA/PT/FE links · DOI citation graph · PubMed API · PubMed MeSH Concept Explorer · Unicode symbol unification · note matching & archiving*
 
 ---
 
@@ -74,6 +74,7 @@ pip install .
 | `cited-by` | Query PubMed for papers citing a given DOI | 查询 PubMed 引用某 DOI 的论文 |
 | `archive` | Hardlink/copy a note + dependent files to target vault | 硬链接/复制笔记及其依赖文件到目标库 |
 | `unify-symbols` | Replace Unicode special chars with ASCII across vault .md | 统一全库 .md 的 Unicode 特殊字符为 ASCII |
+| `pmce` | PubMed MeSH Concept Explorer (DOI/title → MeSH terms) | PubMed MeSH 概念探索器（DOI/标题 → MeSH 词条） |
 
 ---
 
@@ -339,6 +340,24 @@ vaultools unify-symbols --vault C:\Vault --force
 
 ---
 
+### `pmce` — PubMed MeSH Concept Explorer / PubMed MeSH 概念探索器
+
+| Arg | Type | Default | Description |
+| --- | --- | --- | --- |
+| `input` | str | None | .md file path or pasted text (prompts if omitted) |
+| `--path` | str | **Required** | Target Clippings\PENDING directory |
+| `--no-graph` | flag | — | Skip automatic citation-graph rebuild |
+| `--dry-run` | flag | — | Preview without writing |
+
+Queries PubMed for MeSH terms and concept codes related to a paper's DOI/title, saving a structured note to the PENDING directory.
+
+```bash
+vaultools pmce --path C:\Vault\PENDING
+vaultools pmce paper.md --path C:\Vault\PENDING
+```
+
+---
+
 ### `pdf_extractor` — PDF Metadata & First-Page Title Extraction / PDF 元数据与标题提取 (core)
 
 `core/pdf_extractor.py` provides pdfplumber/PyMuPDF utilities reused by `pdf2md-local` and `rename-pdf`:
@@ -390,6 +409,7 @@ DEFAULT_IMAGE_PATH = Path(r'C:\Vault\IMAGE')
 │   ├── remove_doi.py      # DOI removal / DOI 移除
 │   ├── cited_by.py        # PubMed cited-by query / PubMed cited-by
 │   ├── archive.py         # Vault-to-vault archiver / Vault 间归档
+│   ├── pmce.py            # PubMed MeSH Concept Explorer / PubMed MeSH 概念探索
 │   └── unify_symbols.py   # Unicode→ASCII symbol unification / 字符统一
 ├── core/
 │   ├── crossref_api.py    # Crossref + PubMed E-utilities API
@@ -459,7 +479,7 @@ MIT
 
 **作者：** Li Kan <lik1453529@163.com>
 
-# Obsidian-Paper-Tools 3.2 — 织命者卡洛斯
+# Obsidian-Paper-Tools 3.3 — 织命者卡洛斯
 
 > Obsidian。Our Vault。🔗 双向链接。🧠 关系图谱。📂 开放格式。
 > 我们的科研之道。
@@ -491,7 +511,7 @@ MIT
 >
 > 成为 VAULTTOOLER。
 >
-> *— 云端与本地 PDF 转 Markdown · PDF 元数据提取 · 图片垃圾回收 · DOI 引用图谱 · Crossref 缓存清洗 · PubMed API · PyMuPDF 重命名 · 字符统一 · 笔记匹配与归档*
+> *— 云端与本地 PDF 转 Markdown · PDF 元数据提取 · 图片垃圾回收 · DOI 引用图谱 · Crossref 缓存清洗 · PubMed API · PubMed MeSH 概念探索 · PyMuPDF 重命名 · 字符统一 · 笔记匹配与归档*
 
 ---
 
@@ -529,6 +549,7 @@ pip install .
 | `cited-by` | 查询 PubMed 引用某 DOI 的论文 | Query PubMed for papers citing a given DOI |
 | `archive` | 硬链接/复制笔记及其依赖文件到目标库 | Hardlink/copy a note + dependent files to target vault |
 | `unify-symbols` | 统一全库 .md 的 Unicode 特殊字符为 ASCII | Replace Unicode special chars with ASCII across vault .md |
+| `pmce` | PubMed MeSH 概念探索器（DOI/标题 → MeSH 词条） | PubMed MeSH Concept Explorer (DOI/title → MeSH terms) |
 
 ---
 
@@ -760,6 +781,24 @@ vaultools unify-symbols --vault C:\Vault --force
 
 ---
 
+### `pmce` — PubMed MeSH 概念探索器
+
+| 参数 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `input` | str | 无 | .md 文件路径或粘贴文本（省略时提示输入） |
+| `--path` | str | **必填** | 目标 Clippings\PENDING 目录 |
+| `--no-graph` | flag | — | 跳过自动引用图谱重建 |
+| `--dry-run` | flag | — | 预览而不写入 |
+
+查询 PubMed，根据论文 DOI/标题返回相关 MeSH 词条与概念编码，生成结构化笔记到 PENDING 目录。
+
+```bash
+vaultools pmce --path C:\Vault\PENDING
+vaultools pmce paper.md --path C:\Vault\PENDING
+```
+
+---
+
 ### `pdf_extractor` — PDF 元数据与首页标题提取（core）
 
 `core/pdf_extractor.py` 提供 `pdf2md-local` 和 `rename-pdf` 复用的 pdfplumber/PyMuPDF 工具：
@@ -811,6 +850,7 @@ DEFAULT_IMAGE_PATH = Path(r'C:\Vault\IMAGE')
 │   ├── remove_doi.py      # DOI 移除
 │   ├── cited_by.py        # PubMed cited-by 查询
 │   ├── archive.py         # Vault 间归档
+│   ├── pmce.py            # PubMed MeSH 概念探索
 │   └── unify_symbols.py   # 字符统一
 ├── core/
 │   ├── crossref_api.py    # Crossref + PubMed E-utilities API
@@ -879,32 +919,40 @@ MIT
 
 ## 增量对比 (vs v3.2)
 
-| 维度 | v3.2 | v3.2 |
+| 维度 | v3.2 | v3.3 |
 | --- | --- | --- |
-| **新增文件** | — | 无（两项目 `*.py`/`*.toml`/`*.md` 文件集合完全一致） |
+| **新增文件** | — | `commands/pmce.py`（399 行）；`scripts/BLANK/Clippings/PENDING/Posterior … 2 years follow-up.md`（388 行） |
 | **移除文件** | 无（两项目 `*.py`/`*.toml`/`*.md` 文件集合完全一致） | — |
-| **cli.py** | 121 行 · dict `handlers` 分发 · 默认路径内联 | 157 行 · 默认路径提取为模块常量 `_DEFAULT_*` · if/elif 分发 · `_cmd_remove_doi` 被重复定义两次（Bug） |
-| **README.md** | 822 行 · 末尾含「增量对比 (vs v3.1)」章节 | 805 行 · 删除 vs v3.1 对比章节，其余内容不变 |
-| **commands/archive.py** | 111 行 · `_copy_file` 内联 `os.link`/`shutil.copy2` | 106 行 · 删除 `os`/`shutil` 导入 · 改用共享 `core.try_copy` |
-| **commands/cited_by.py** | 108 行 · `_get_main_doi` 内联提取 + `repair_doi_text` 正文回退 | 105 行 · 改名 `_extract_main_doi` · 改用 `core.doi.get_main_doi` · 删除正文回退 |
-| **commands/crossref.py** | 281 行 · `split('doi:', 1)` · 变量 `verified_doi` | 281 行 · `partition('doi:')` · 变量重命名 `result`（行为等价） |
-| **commands/markdown_graph.py** | 222 行 · `+= not` · `cited_by_map` 手动判空 · 先处理引用分支 | 219 行 · `+= int(not)` · `setdefault` · 先处理未处理分支（if/else 对调） |
-| **commands/pdf2md.py** | 529 行 · 内联「完成_」重命名/TRASH 回退逻辑 ×2 处 | 533 行 · 新增 `_mark_pdf_done` 助手 · 完成检测循环改 early-continue |
-| **commands/rename_pdf.py** | 246 行 · block `type` 过滤在循环内 continue · `KEYWORDS_SKIP` tuple | 240 行 · 列表推导过滤 `type==0` · `SKIP_TERMS` frozenset · 过滤条件合并 |
-| **commands/unify_symbols.py** | 117 行 · 含 `_stem_map_from_rename` | 113 行 · 删除未使用的 `_stem_map_from_rename` |
-| **core/crossref_api.py** | 221 行 · 缓存读写内联 · `ref.get('unstructured','')` | 232 行 · 提取 `_lookup_cache`/`_set_cache` 助手 · `if result:` 简化 |
-| **core/doi.py** | 130 行 · `SMART_QUOTE_TABLE` · `is_plausible_doi` 多重 early-return | 126 行 · 更名 `CANONICAL_CHAR_TABLE`（保留 `SMART_QUOTE_TABLE` 别名） · 单表达式 `not (or...)` |
-| **core/frontmatter.py** | 88 行 · `except: pass` · `if include_refs:` | 88 行 · `except: continue` · `fm or None` · `if include_refs and fm:`（防 None） |
-| **core/obsidian_path.py** | 85 行 · `_fuzzy_search` 收集候选列表再排序 | 89 行 · 单遍循环按 mtime 追踪最优候选（省一次列表分配） |
-| **core/pdf_extractor.py** | 168 行 · `separator` 提前构造 · `merge_paragraphs` while 循环 | 160 行 · `separator` 延迟构造 · `merge_paragraphs` 改 for + `result[-1]` |
-| **core/refs.py** | 143 行 · 本地 `_CANONICAL_MAP`/`_CANONICAL_TABLE` · `list(variants)` | 135 行 · 复用 `core.doi.CANONICAL_CHAR_TABLE` · `tuple(variants)` · `wikilink_doi` 简化 |
+| **README.md** | 910 行 · 末尾含「增量对比 (vs v3.2)」章节 | 916 行 · 新增 `pmce` 文档（副标题、命令表、用法、目录树，中英各一处）· 删除 vs v3.2 章节 |
+| **cli.py** | 157 行 · 硬编码默认路径 `_DEFAULT_*` · `_cmd_remove_doi` 重复定义两次（Bug）· pdf2md 云/本地两独立分支 | 146 行 · 默认路径改从 `config` 导入 · 删除重复 `_cmd_remove_doi` · 新增 `pmce` 子命令（`--path` 必填/`--no-graph`/`--dry-run`）· 两分支合并为 `local=(cmd=='pdf2md-local')` |
+| **commands/__init__.py** | 文档字符串缺 `pmce` | 补入 `pmce` |
+| **commands/archive.py** | `try_copy` 模块顶+函数内重复导入 | 删除函数内冗余导入 |
+| **commands/cited_by.py** | 传统 if/else 回退逻辑 | walrus `if doi :=` + early-return 重写 `_extract_main_doi` |
+| **commands/clean_images.py** | 扫描/移动逻辑内联 · 导入 `as_completed` | 提取 `scan_referenced_images`、`move_images_to` 模块级函数供复用 |
+| **commands/crossref.py** | 循环+分支 · 标题搜索分支嵌套深 | 推导式+`next()` · `if not main_doi` 外提（修正缩进层级） |
+| **commands/markdown_graph.py** | cited 重建用显式循环 | 列表推导式 + walrus 单表达式返回 |
+| **commands/match.py** | `_chinese_title_from_h1` 每文件重读 IO · `_pa_by_doi` 按需读盘 | 改 `_chinese_title_from_text(text)` · 索引期缓存 `pa_text`(小写)/`pa_alias` · 新增 `_find_chi` 助手 |
+| **commands/pdf2md.py** | `_append_crossref_refs` 返回二元组 · `_upload_one` 定义在批次循环内 · 默认路径硬编码 | 改单返回值 · `_upload_one` 提为模块级 · 默认路径/Token 改从 `config` 导入 |
+| **commands/reconcile.py** | FE 独立循环 · 嵌套 O(F×V×N) 扫描 | 新增 `_vault_of_stem`、预计算 `pa_by_stem` 索引 · FE 并入统一 (pa/pt/fe) 主循环 |
+| **commands/remove_doi.py** | threading.Lock + `as_completed` 手动收集 | 改 `ex.map` + `itertools.repeat`，删线程锁 |
+| **commands/rename_pdf.py** | 每次调用构建文件名清洗映射表 · U+FFFD 双写法 | 模块级 `_FILENAME_STRIP_TABLE` · `ord(c) == 0xFFFD` |
+| **commands/trash.py** | 复用 `_scan_one` + 自实现移动 | 改用共享 `scan_referenced_images` / `move_images_to` |
+| **commands/unify_symbols.py** | 三处重复的子目录嵌套扫描 | 提取 `_SUBDIRS` + `_iter_subdirs` 生成器统一复用 |
+| **config.py** | 仅路径常量 | 新增 `CROSSREF_CACHE`、`CROSSREF_MAILTO` |
+| **core/crossref_api.py** | 硬编码缓存路径（「勿改」注释）与 mailto · PubMed 请求手写 try/except | 改从 `config` 导入 · `lock or nullcontext()` · esearch/elink/esummary 复用 `_api_get` |
+| **core/frontmatter.py** | `build_doi_set` 函数内局部导入 | 模块顶部导入 · 删多余 `List` 类型 |
+| **core/markdown_utils.py** | `clean_markdown_body` 顺序 5 次 `.sub` | 提取 `_PIPELINE` 元组循环执行 |
+| **core/obsidian_path.py** | `_fuzzy_search` 双判断+独立 try · `_fallback_search` 列表推导去重 | 单遍循环 mtime 追踪最优 · `dict.fromkeys` 去重 |
+| **core/pdf_extractor.py** | 循环+集合累加 DOI · `merge_paragraphs` 索引遍历 | 嵌套集合推导 · `for line in lines[1:]` · `prev[-1]` |
+| **core/refs.py** | 单独 `_PA_PREFIX_RE` · `norm_stems` 手动逐条扩集合 | 改用 `_STEM_PREFIX_RE` · 集合推导式 · walrus 单表达式 |
+| **pyproject.toml** | description 含 `pdf_extractor (PyMuPDF/pdfplumber metadata)` | description 改 `pmce (PubMed MeSH Concept Explorer)` |
 
 ### 关键变化
-
-- **无文件新增/移除**：v3.2 与 v3.2 的 23 个源文件（`*.py`/`*.toml`/`*.md`）路径与数量完全一致，本轮全部为原地修改；未变化的 10 个文件：`config.py`、`pyproject.toml`、`commands/clean_images.py`、`commands/match.py`、`commands/reconcile.py`、`commands/remove_doi.py`、`commands/trash.py`、`commands/__init__.py`、`core/markdown_utils.py`、`core/__init__.py`。
-- **cli.py 引入重复函数 Bug**：`_cmd_remove_doi` 被定义两次（`cli.py:37-47` 与 `cli.py:50-60`），后者覆盖前者；同时默认路径内联常量提取为模块级 `_DEFAULT_*`，dispatch 由 dict 改为 if/elif 链。
-- **DOI/引用逻辑收敛**：`cited_by.py` 放弃正文 `repair_doi_text` 回退改用 `core.doi.get_main_doi`；`refs.py` 删除本地 `_CANONICAL_MAP`，统一复用 `core.doi.CANONICAL_CHAR_TABLE`（`doi.py` 的 `SMART_QUOTE_TABLE` 更名并保留别名）。
-- **文件复制/PDF 完成逻辑集中**：`archive.py` 删除 `os`/`shutil` 直连改用 `core.try_copy`；`pdf2md.py` 把两处内联的「重命名 `完成_` 前缀 / 移入 TRASH」收敛为 `_mark_pdf_done` 助手。
-- **行为等价重构为主**：`markdown_graph.py`（if/else 分支对调、`setdefault`、`+= int(not)`）、`crossref.py`（`partition`）、`obsidian_path.py`（单遍 mtime 最优）、`pdf_extractor.py`（`merge_paragraphs` 重写、`separator` 延迟构造）、`doi.py`/`crossref_api.py`（表达式化与缓存助手抽取）均无功能变化。
-- **防御性修正**：`frontmatter.py` 的 `build_doi_set` 增加 `if include_refs and fm`（防 `fm` 为 None）；`rename_pdf.py` 将 `KEYWORDS_SKIP` 改为 frozenset `SKIP_TERMS` 并合并过滤条件。
-- **README**：仅删除 v3.2 末尾「增量对比 (vs v3.1)」章节，其余 805 行与 v3.2 完全一致。
+- **新增 `pmce` 命令**：`commands/pmce.py`（399 行）— 交互/文件/粘贴输入 → 提取 DOI/PMID/标题 → EuropePMC REST 元数据匹配 → 抓取 OA 全文 JATS XML → 转结构化 Markdown 写入 PENDING → 自动重建引用图谱；`cli.py` 新增 `pmce` 子命令；README 增补中英文档。注意：README 描述为「PubMed MeSH 概念探索器」，实际实现为「PMC 全文抓取转 MD」（cli help 亦如此描述，README 描述与实现存在出入）。
+- **配置中心化**：默认路径与 MinerU Token 从 cli.py/pdf2md.py 硬编码改为从 `config.py` 导入；`CROSSREF_CACHE`、`CROSSREF_MAILTO` 上移 `config.py`，删除 core/crossref_api.py 的「勿改」硬编码注释。
+- **并发代码简化**：remove_doi.py 删除 threading.Lock，改用 `ex.map + repeat`；clean_images/trash 提取共享 `scan_referenced_images`/`move_images_to`；crossref_api 用 `nullcontext` 统一锁语义。
+- **性能优化**：match.py 索引期缓存 PA 正文（小写）与别名，`_pa_by_doi` 不再重复读盘；reconcile.py 预计算 `pa_by_stem` 索引，消除 O(F×V×N) 嵌套扫描。
+- **重构去重**：unify_symbols 提取 `_iter_subdirs` 生成器；markdown_utils 提取 `_PIPELINE`；refs.py 合并正则；rename_pdf 缓存文件名清洗映射表；pdf_extractor 改集合推导。
+- **Bug 修复**：删除 cli.py 中 `_cmd_remove_doi` 重复定义；crossref.py 标题搜索分支缩进修正（`if not main_doi` 外提）。
+- **新增示例数据**：`scripts/BLANK/Clippings/PENDING/…2 years follow-up.md`（388 行，frontmatter 含 cited_by/reference）— 含编码损坏的 DOI wikilink（`�?`、`￥` 占位符），疑为测试/样例库文件。
+- **README 清理**：删除 v3.2 末尾「增量对比 (vs v3.2)」整章，由本次 vs v3.2 对比取代。

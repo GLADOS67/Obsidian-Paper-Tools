@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 from core.crossref_api import (fetch_references, get_doi_from_citation,
                                 load_cache, save_cache)
 from core.doi import (PATTERN_DOI, extract_doi_from_frontmatter,
-                       find_plausible_dois, get_main_doi, process_doi, repair_doi_text)
+                       get_main_doi, process_doi, repair_doi_text)
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.obsidian_path import resolve_input_path, SM_QUICK
 from core.pdf_extractor import extract_first_doi_from_pdf
@@ -35,12 +35,8 @@ _NON_TITLE_RE = re.compile(
 
 def _build_ref_list(md_stem: str, main_doi: Optional[str], references: List[Dict],
                     existing_refs: Optional[List[str]] = None) -> List[str]:
-    final = [] if existing_refs is None else process_existing_references(existing_refs)
-    seen = set()
-    if existing_refs is not None:
-        for r in final:
-            if p := split_wikilink(r):
-                seen.add(p[1].lower())
+    final = process_existing_references(existing_refs) if existing_refs is not None else []
+    seen = {p[1].lower() for r in final if (p := split_wikilink(r))}
     if main_doi:
         md_display, _ = process_doi(main_doi)
         final = [r for r in final if md_display.lower() not in r.lower()]
@@ -72,13 +68,9 @@ def _get_main_doi(pdf_path: Optional[Path], content: Optional[str], fm: Optional
 
 def _get_md_title(content: Optional[str], fm_data: Optional[dict], fallback_stem: str) -> str:
     if content:
-        headings = RE_MD_HEADING.findall(content)
-        for h in headings:
-            h = h.strip()
-            if not _NON_TITLE_RE.match(h):
-                return h
-        if headings:
-            return headings[0].strip()
+        stripped = [h.strip() for h in RE_MD_HEADING.findall(content)]
+        if stripped:
+            return next((h for h in stripped if not _NON_TITLE_RE.match(h)), stripped[0])
     if fm_data and fm_data.get('title'):
         return fm_data['title']
     return fallback_stem
@@ -121,14 +113,14 @@ def process_file(file_path: Path, cache: dict) -> None:
     if not main_doi:
         print('未提取到 DOI，尝试标题搜索...')
         stem = file_path.stem
-        md_title = _get_md_title(content, fm_data, stem)
-        main_doi = _resolve_doi_by_title(fm_data.get('title', stem), md_title, cache)
-        if not main_doi:
-            if suffix == '.md':
-                process_local_references_in_md(file_path, cache=cache)
-            else:
-                print('未能匹配论文，操作终止。')
-            return
+        main_doi = _resolve_doi_by_title(fm_data.get('title', stem),
+                                         _get_md_title(content, fm_data, stem), cache)
+    if not main_doi:
+        if suffix == '.md':
+            process_local_references_in_md(file_path, cache=cache)
+        else:
+            print('未能匹配论文，操作终止。')
+        return
     print(f'目标DOI: {main_doi}')
     refs = fetch_references(main_doi, cache)
     if suffix == '.md':

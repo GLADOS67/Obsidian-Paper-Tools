@@ -39,10 +39,16 @@ def _fix_bracket_link(m: re.Match) -> str:
     return g[1:-1] if g.startswith('[[') else g.replace('[', '(', 1).replace(']', ')', 1)
 
 
+_PIPELINE = (
+    (ARTIFACT_TAGS, ''),
+    (PATTERN_IMAGE, _fix_img),
+    (PATTERN_WRONG_CLICKABLE_IMAGE, r'\1(\2)'),
+    (COMBINED_LINK_PATTERN, _fix_combined_link),
+    (PATTERN_BRACKET_LINKS, _fix_bracket_link),
+)
+
+
 def clean_markdown_body(body: str) -> str:
-    body = ARTIFACT_TAGS.sub('', body)
-    body = PATTERN_IMAGE.sub(_fix_img, body)
-    body = PATTERN_WRONG_CLICKABLE_IMAGE.sub(r'\1(\2)', body)
-    body = COMBINED_LINK_PATTERN.sub(_fix_combined_link, body)
-    body = PATTERN_BRACKET_LINKS.sub(_fix_bracket_link, body)
+    for pattern, repl in _PIPELINE:
+        body = pattern.sub(repl, body)
     return body

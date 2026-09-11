@@ -13,7 +13,6 @@ def canonicalize_stem(stem: str) -> str:
 WIKILINK_RE = re.compile(r'\[\[([^|]+)\|([^]]+)\]\]')
 LINK_TARGET_RE = re.compile(r'\[\[\s*([^|\]]+)')
 H1_WIKILINK_RE = re.compile(r'^#\s*\[\[([^|]+)\|([^]]+)\]\]')
-_PA_PREFIX_RE = re.compile(r'^\d+_?\s*')
 
 
 def parse_h1_wikilink(text: str) -> Optional[Tuple[str, str]]:
@@ -34,8 +33,7 @@ def extract_wikilink_name(value) -> Optional[str]:
 def first_ref_target(ref_list: list) -> Optional[str]:
     if not ref_list:
         return None
-    ref0 = ref_list[0].replace('\n', ' ').strip() if isinstance(ref_list[0], str) else str(ref_list[0]).replace('\n', ' ').strip()
-    m = WIKILINK_RE.search(ref0)
+    m = WIKILINK_RE.search(str(ref_list[0]).replace('\n', ' '))
     return m.group(1).strip() if m else None
 
 
@@ -46,32 +44,26 @@ def extract_doi_set(ref_list: list) -> set:
     for ref in ref_list:
         if not isinstance(ref, str):
             continue
-        match = WIKILINK_RE.search(ref.replace('\n', ' '))
-        source = match.group(2) if match else ref
-        result.update(d for d in PATTERN_DOI.findall(source))
+        m = WIKILINK_RE.search(ref.replace('\n', ' '))
+        result.update(PATTERN_DOI.findall(m.group(2) if m else ref))
     return result
 
 
 _STEM_PREFIX_RE = re.compile(r'^\d+_?\s*')
 
+
 def norm_stems(stem: str) -> set:
     variants = {stem, canonicalize_stem(stem)}
-    for v in tuple(variants):
-        variants.add(v.replace(' ', '_'))
-        variants.add(v.replace('_', ' '))
-    stripped = _STEM_PREFIX_RE.sub('', stem)
-    if stripped != stem:
+    variants |= {w for v in tuple(variants) for w in (v.replace(' ', '_'), v.replace('_', ' '))}
+    if (stripped := _STEM_PREFIX_RE.sub('', stem)) != stem:
         variants.add(stripped)
-        for v in tuple(variants):
-            sv = _STEM_PREFIX_RE.sub('', v)
-            if sv != v:
-                variants.add(sv)
+        variants |= {sv for v in tuple(variants) if (sv := _STEM_PREFIX_RE.sub('', v)) != v}
     return variants
 
 
 def pa_stem_variants(pa_stem: str) -> list:
     variants = [pa_stem]
-    stripped = _PA_PREFIX_RE.sub('', pa_stem)
+    stripped = _STEM_PREFIX_RE.sub('', pa_stem)
     if stripped and stripped != pa_stem:
         variants.append(stripped)
     for v in list(variants):
@@ -114,15 +106,13 @@ def process_existing_references(refs: List[str]) -> List[str]:
         ref = ref.strip()
         parsed = split_wikilink(ref)
         if parsed and parsed[1]:
-            key = parsed[1].lower()
-            name = parsed[0].replace('/', '￥')
-            display = parsed[1]
+            key, out = parsed[1].lower(), f'[[{parsed[0].replace("/", "￥")}|{parsed[1]}]]'
         else:
-            key = ref
+            key, out = ref, ref
         if key in seen:
             continue
         seen.add(key)
-        processed.append(f'[[{name}|{display}]]' if (parsed and parsed[1]) else ref)
+        processed.append(out)
     return processed
 
 

@@ -3,13 +3,15 @@
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import yaml
 try:
     from yaml import CSafeLoader as _YamlLoader, CSafeDumper as _YamlDumper
 except ImportError:
     from yaml import SafeLoader as _YamlLoader, SafeDumper as _YamlDumper
+
+from core.doi import PATTERN_DOI, extract_doi_from_frontmatter
 
 PATTERN_FRONTMATTER = re.compile(r'^---\r?\n(.*?)\r?\n---', re.DOTALL | re.MULTILINE)
 _ENCODINGS = ('utf-8', 'gbk')
@@ -71,7 +73,6 @@ def build_doi_set(md_dir: Path, include_refs: bool = False) -> set:
 
     When include_refs is True, also gather DOIs from 'reference' and 'cited_by' wikilinks.
     """
-    from core.doi import extract_doi_from_frontmatter, PATTERN_DOI
     existing = set()
     for md_file in md_dir.rglob('*.md'):
         try:

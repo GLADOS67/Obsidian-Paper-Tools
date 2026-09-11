@@ -5,6 +5,7 @@ import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -13,8 +14,7 @@ import requests
 
 from core.doi import process_doi
 
-# 【勿改】强制硬编码路径，禁止软链接到 config
-CROSSREF_CACHE = Path(r'D:\ResearchFront\DATA\API\crossref_cache.json')
+from config import CROSSREF_CACHE, CROSSREF_MAILTO
 CROSSREF_API_BASE = 'https://api.crossref.org/works'
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0'
 
@@ -47,22 +47,13 @@ def _api_get(url: str, params: dict = None, timeout: int = 10) -> Optional[dict]
 
 
 def _lookup_cache(key: str, cache: dict, lock: threading.Lock = None):
-    if lock:
-        with lock:
-            if key in cache:
-                val = cache[key]
-                return (val[0], val[1]) if isinstance(val, (tuple, list)) and len(val) == 2 else None
-    elif key in cache:
-        val = cache[key]
-        return (val[0], val[1]) if isinstance(val, (tuple, list)) and len(val) == 2 else None
-    return None
+    with lock or nullcontext():
+        val = cache.get(key)
+    return (val[0], val[1]) if isinstance(val, (tuple, list)) and len(val) == 2 else None
 
 
 def _set_cache(key: str, value, cache: dict, lock: threading.Lock = None):
-    if lock:
-        with lock:
-            cache[key] = value
-    else:
+    with lock or nullcontext():
         cache[key] = value
 
 
@@ -74,7 +65,7 @@ def get_doi_from_citation(citation_text: str, cache: dict = None,
     if cached is not None:
         return cached
     data = _api_get(CROSSREF_API_BASE, params={
-        'rows': 1, 'mailto': 'lik1453529@wmu.edu.cn', 'query': citation_text,
+        'rows': 1, 'mailto': CROSSREF_MAILTO, 'query': citation_text,
     })
     time.sleep(random.uniform(1.0, 2.0))
     if data is None:
@@ -176,27 +167,21 @@ def get_cited_by_pubmed(doi: str, cache: dict = None,
         return total, [d for d in all_dois if d.lower() not in existing_dois][:max_rows]
 
     base = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
-    try:
-        resp = _http.get(f'{base}/esearch.fcgi',
-                         params={'db': 'pubmed', 'term': f'{doi}[doi]', 'retmode': 'json'},
-                         timeout=10)
-        resp.raise_for_status()
-        pmids = resp.json().get('esearchresult', {}).get('idlist', [])
-    except Exception:
+    data = _api_get(f'{base}/esearch.fcgi',
+                    params={'db': 'pubmed', 'term': f'{doi}[doi]', 'retmode': 'json'})
+    if data is None:
         return 0, []
+    pmids = data.get('esearchresult', {}).get('idlist', [])
     if not pmids:
         return _finalize(0, [])
     time.sleep(random.uniform(1.0, 2.0))
 
-    try:
-        resp = _http.get(f'{base}/elink.fcgi',
-                         params={'dbfrom': 'pubmed', 'id': pmids[0],
-                                 'linkname': 'pubmed_pubmed_citedin', 'retmode': 'json'},
-                         timeout=10)
-        resp.raise_for_status()
-        linksets = resp.json().get('linksets', [])
-    except Exception:
+    data = _api_get(f'{base}/elink.fcgi',
+                    params={'dbfrom': 'pubmed', 'id': pmids[0],
+                            'linkname': 'pubmed_pubmed_citedin', 'retmode': 'json'})
+    if data is None:
         return _finalize(0, [])
+    linksets = data.get('linksets', [])
     links = [l for db in (linksets and linksets[0].get('linksetdbs', []) or []) for l in db.get('links', [])]
     if not links:
         return _finalize(0, [])
@@ -206,14 +191,11 @@ def get_cited_by_pubmed(doi: str, cache: dict = None,
     for i in range(0, len(links), 100):
         batch = links[i:i + 100]
         time.sleep(random.uniform(1.0, 2.0))
-        try:
-            resp = _http.get(f'{base}/esummary.fcgi',
-                             params={'db': 'pubmed', 'id': ','.join(batch), 'retmode': 'json'},
-                             timeout=10)
-            resp.raise_for_status()
-            results = resp.json().get('result', {})
-        except Exception:
+        results = _api_get(f'{base}/esummary.fcgi',
+                           params={'db': 'pubmed', 'id': ','.join(batch), 'retmode': 'json'})
+        if results is None:
             continue
+        results = results.get('result', {})
         for pmid_id in batch:
             item = results.get(str(pmid_id))
             if not item:

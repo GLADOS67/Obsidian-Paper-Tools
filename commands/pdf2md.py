@@ -25,7 +25,8 @@ from core.markdown_utils import clean_markdown_body
 from core.refs import build_existing_dois, canonicalize_stem, new_doi_wikilinks, process_existing_references
 from core import try_copy, is_vault_dir
 from core.pdf_extractor import convert_pdf_to_md, extract_dois_from_pdf
-from config import DEFAULT_IMAGE_PATH, OBSIDIAN_ROOT
+from config import (DEFAULT_IMAGE_PATH, DEFAULT_MD_PATH, DEFAULT_PDF_PATH,
+                    DEFAULT_ZIP_PATH, MINERU_TOKEN, OBSIDIAN_ROOT)
 
 
 URL_PATTERN = re.compile(
@@ -85,22 +86,24 @@ def apply_upload_urls(token, files_info, url):
 
 
 def _append_crossref_refs(fm, rest, main_doi, crossref_cache, md_name):
+    """拉取Crossref参考文献合并进 fm['reference']；正文中无参考文献段时返回待追加的段落。"""
     if not main_doi:
-        return main_doi, None
+        return None
     references = fetch_references(main_doi, crossref_cache)
     if not references:
-        return main_doi, None
+        return None
     ref_dois = new_doi_wikilinks((r['doi'] for r in references if r['doi']),
                                  build_existing_dois(fm.get('reference', [])))
     if ref_dois:
         fm['reference'] = fm.get('reference', []) + ref_dois
     if '## 参考文献' in rest:
-        return main_doi, None
+        return None
     lines = [f'{i}. {r.get("text","")}{" DOI: "+r.get("doi","") if r.get("doi") else ""}'
              for i, r in enumerate(references, 1) if r.get('text') or r.get('doi')]
-    if lines:
-        print(f'已将 {len(references)} 条参考文献添加到 {md_name}')
-    return main_doi, '\n\n## 参考文献\n' + '\n'.join(lines) if lines else None
+    if not lines:
+        return None
+    print(f'已将 {len(references)} 条参考文献添加到 {md_name}')
+    return '\n\n## 参考文献\n' + '\n'.join(lines)
 
 
 def _extract_json_data(json_src):
@@ -203,17 +206,15 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_ca
     if existing_refs:
         fm['reference'] = process_existing_references(existing_refs)
 
-    add_refs = True
-    if main_doi:
-        year = get_issued_year(main_doi, crossref_cache)
-        if year is not None and datetime.now().year - year > ref_max_age:
-            add_refs = False
-            print(f'超{ref_max_age}年({year})，仅添加主DOI: {md_dst.name}')
+    year = get_issued_year(main_doi, crossref_cache) if main_doi else None
+    add_refs = year is None or datetime.now().year - year <= ref_max_age
+    if not add_refs:
+        print(f'超{ref_max_age}年({year})，仅添加主DOI: {md_dst.name}')
 
     if add_refs:
         _merge_new_dois(fm, all_dois, md_dst.name)
         if enable_api_refs:
-            _, ref_section = _append_crossref_refs(fm, rest, main_doi, crossref_cache, md_dst.name)
+            ref_section = _append_crossref_refs(fm, rest, main_doi, crossref_cache, md_dst.name)
             if ref_section:
                 rest += ref_section
     if main_doi:
@@ -348,8 +349,7 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
                                cited_by_max=10, batch_files=None, images_output=None,
                                ref_max_age=15):
     name_to_path = {Path(f).name: Path(f) for f in (batch_files or [])}
-    if images_output is None:
-        images_output = DEFAULT_IMAGE_PATH
+    images_output = images_output or DEFAULT_IMAGE_PATH
     images_output.mkdir(exist_ok=True)
     files = _poll_batch_completion(batch_id, token, expected_count=len(batch_files or []))
     if files is None:
@@ -402,15 +402,28 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
     print(f'批次 {batch_id} 处理完成！Markdown: {path_md0}，图片: {images_output}')
 
 
+def _upload_one(f, u):
+    try:
+        with open(f, 'rb') as fh:
+            r = requests.put(u, data=fh, timeout=60)
+        # 用 with 确保上传后立即关闭文件句柄，避免占用导致后续标记完成失败
+        if r.status_code == 200:
+            return f
+        print(f'上传失败：{f} | 状态码：{r.status_code}')
+    except Exception as e:
+        print(f'上传异常：{f} | 错误：{e}')
+    return None
+
+
 def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
                enable_api_refs: bool = True, enable_cited_by: bool = True,
                cited_by_max: int = 10, token_path: str = None,
                local: bool = False, path_images: str = None,
                ref_max_age: int = 15) -> None:
-    token_path = token_path or r'C:\ResearchFront\DATA\API\MinerU.txt'
-    path_pdf = path_pdf or r'C:\Vault\PDF'
-    path_zip = path_zip or r'C:\Vault\ZIP'
-    path_md0 = path_md0 or r'C:\Vault\PENDING\Clippings'
+    token_path = token_path or MINERU_TOKEN
+    path_pdf = path_pdf or DEFAULT_PDF_PATH
+    path_zip = path_zip or DEFAULT_ZIP_PATH
+    path_md0 = path_md0 or DEFAULT_MD_PATH
 
     crossref_cache = load_cache()
     pp = Path(path_pdf)
@@ -501,18 +514,6 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
         bid = url_result['batch_id']
         batch_ids.append(bid)
         print(f'批次 {batch_idx} 申请链接成功 | batch_id：{bid}')
-
-        def _upload_one(f, u):
-            try:
-                with open(f, 'rb') as fh:
-                    r = requests.put(u, data=fh, timeout=60)
-                # 用 with 确保上传后立即关闭文件句柄，避免占用导致后续标记完成失败
-                if r.status_code == 200:
-                    return f
-                print(f'上传失败：{f} | 状态码：{r.status_code}')
-            except Exception as e:
-                print(f'上传异常：{f} | 错误：{e}')
-            return None
 
         with ThreadPoolExecutor(max_workers=5) as ex:
             uploaded_files = [f for f in ex.map(_upload_one, batch_files, url_result['upload_urls']) if f]

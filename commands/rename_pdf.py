@@ -45,6 +45,7 @@ MSID_RE = re.compile(
 )
 SOURCE_EXT_RE = re.compile(r'\.(?:qxd|indd|docx?|pptx?|ai|cdr|psd|pub|idml)\b', re.IGNORECASE)
 STATUS_SET = frozenset(STATUS_MARKERS)
+_FILENAME_STRIP_TABLE = str.maketrans({c: '' for c in r'<>:"/\|?*'})
 
 
 def _is_title_junk(title):
@@ -64,7 +65,7 @@ def _is_title_junk(title):
             return True
         if sum(1 for w in words if len(w) == 1) >= 3 and len(title) < 40:
             return True
-    bad = sum(1 for c in title if ord(c) < 32 or ord(c) in (0xFFFD, 65533))
+    bad = sum(1 for c in title if ord(c) < 32 or ord(c) == 0xFFFD)
     return bad / len(title) > 0.3
 
 
@@ -172,7 +173,7 @@ def _extract_from_flat_page(spans, page_h):
 
 def _sanitize_filename(title):
     title = title.translate(SMART_QUOTE_TABLE).replace('\n', ' ').replace('\r', ' ')
-    title = title.translate(str.maketrans({c: '' for c in r'<>:"/\|?*'}))
+    title = title.translate(_FILENAME_STRIP_TABLE)
     title = ' '.join(title.split())
     if len(title) > 250:
         cut = title[:251].rfind(' ')

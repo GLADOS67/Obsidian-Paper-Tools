@@ -84,15 +84,9 @@ def _rebuild_reference_list(refs: List, unique_map: Dict[str, DoiEntry],
 def _resolve_cited_by(cited: List, unique_map: Dict[str, DoiEntry]) -> List[str]:
     if not cited:
         return []
-    parsed_items = []
-    for item in cited:
-        parsed = _parse_cited_by_entry(item)
-        if not parsed:
-            continue
-        name_part, display_doi = parsed
-        parsed_items.append((display_doi, process_doi(display_doi)[1]))
-    refs, _ = _rebuild_reference_list(parsed_items, unique_map, is_existing=False)
-    return refs
+    parsed_items = [(p[1], process_doi(p[1])[1]) for item in cited
+                    if (p := _parse_cited_by_entry(item))]
+    return _rebuild_reference_list(parsed_items, unique_map, is_existing=False)[0]
 
 
 def _resolve_self_doi(file_stem: str, refs: List[str]) -> Optional[str]:

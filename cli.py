@@ -3,6 +3,7 @@
 import argparse
 
 from commands.pdf2md import run_pdf2md
+from commands.pmce import run_pmce
 from commands.markdown_graph import run_markdown_graph
 from commands.crossref import handle_input as crossref_handle, run_crossref_interactive
 from commands.match import run_match
@@ -14,37 +15,20 @@ from commands.rename_pdf import run_rename_pdf
 from commands.clean_images import run_clean_images
 from commands.reconcile import run_reconcile
 from commands.unify_symbols import run_unify_symbols
-
-_DEFAULT_PDF = r'C:\Vault\PDF'
-_DEFAULT_MD = r'C:\Vault\PENDING\Clippings'
-_DEFAULT_IMG = r'C:\Vault\IMAGE'
-_DEFAULT_ZIP = r'C:\Vault\ZIP'
-_DEFAULT_VAULT = r'C:\Vault'
+from config import (DEFAULT_IMAGE_PATH, DEFAULT_MD_PATH, DEFAULT_PDF_PATH,
+                    DEFAULT_ZIP_PATH, OBSIDIAN_ROOT)
 
 
 def _add_api_args(parser, with_zip=True):
-    parser.add_argument('--path_pdf', default=_DEFAULT_PDF)
-    parser.add_argument('--path_md0', default=_DEFAULT_MD)
-    parser.add_argument('--path_images', default=_DEFAULT_IMG)
+    parser.add_argument('--path_pdf', default=DEFAULT_PDF_PATH)
+    parser.add_argument('--path_md0', default=DEFAULT_MD_PATH)
+    parser.add_argument('--path_images', default=DEFAULT_IMAGE_PATH)
     if with_zip:
-        parser.add_argument('--path_zip', default=_DEFAULT_ZIP)
+        parser.add_argument('--path_zip', default=DEFAULT_ZIP_PATH)
     parser.add_argument('--enable_api_references', action='store_true', default=True)
     parser.add_argument('--enable_cited_by', action='store_true', default=True)
     parser.add_argument('--cited_by_max', type=int, default=10)
     parser.add_argument('--ref_max_age', type=int, default=15)
-
-
-def _cmd_remove_doi(args):
-    doi = args.doi or input('输入要移除的错误DOI: ').strip()
-    if not doi:
-        print('未输入DOI')
-        return
-    modified = run_remove_doi(args.path, doi)
-    if modified:
-        for p, c in modified:
-            print(f'  [{c}行] {p.name}')
-    else:
-        print('未找到匹配')
 
 
 def _cmd_remove_doi(args):
@@ -105,9 +89,15 @@ def main():
     p_rec.add_argument('--force', action='store_true')
 
     p_unify = sub.add_parser('unify-symbols', help='规范化文件名和wikilink中的Unicode符号')
-    p_unify.add_argument('--vault', default=r'C:\Vault')
+    p_unify.add_argument('--vault', default=OBSIDIAN_ROOT)
     p_unify.add_argument('--dry-run', action='store_true', default=True)
     p_unify.add_argument('--force', action='store_true')
+
+    p_pmce = sub.add_parser('pmce', help='PMID/DOI/标题抓取PMC全文MD至PENDING')
+    p_pmce.add_argument('input', nargs='?', default=None, help='输入文件路径或直接文本(缺省交互粘贴)')
+    p_pmce.add_argument('--path', required=True, help='目标Clippings\\PENDING目录')
+    p_pmce.add_argument('--no-graph', action='store_true', help='跳过自动引用图谱')
+    p_pmce.add_argument('--dry-run', action='store_true')
 
     args = parser.parse_args()
     if args.command is None:
@@ -115,14 +105,11 @@ def main():
         return
 
     cmd = args.command
-    if cmd == 'pdf2md':
+    if cmd in ('pdf2md', 'pdf2md-local'):
         run_pdf2md(args.path_pdf, getattr(args, 'path_zip', None), args.path_md0,
                    args.enable_api_references, args.enable_cited_by, args.cited_by_max,
-                   local=False, path_images=args.path_images, ref_max_age=args.ref_max_age)
-    elif cmd == 'pdf2md-local':
-        run_pdf2md(args.path_pdf, getattr(args, 'path_zip', None), args.path_md0,
-                   args.enable_api_references, args.enable_cited_by, args.cited_by_max,
-                   local=True, path_images=args.path_images, ref_max_age=args.ref_max_age)
+                   local=(cmd == 'pdf2md-local'), path_images=args.path_images,
+                   ref_max_age=args.ref_max_age)
     elif cmd == 'markdown':
         run_markdown_graph(args.path)
     elif cmd == 'crossref':
@@ -151,6 +138,8 @@ def main():
         run_reconcile(dry_run=not args.force)
     elif cmd == 'unify-symbols':
         run_unify_symbols(args.vault, dry_run=not args.force)
+    elif cmd == 'pmce':
+        run_pmce(args.input, args.path, no_graph=args.no_graph, dry_run=args.dry_run)
 
 
 if __name__ == '__main__':

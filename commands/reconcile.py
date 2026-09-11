@@ -59,23 +59,26 @@ def build_clippings_index(vault_root: Path) -> Tuple[Dict[str, str], Set[str], S
     return clip_to_vault, pa_referenced, pt_referenced
 
 
+def _vault_of_stem(stem: str, clip_to_vault: Dict[str, str]) -> Optional[str]:
+    for variant in norm_stems(stem):
+        if variant in clip_to_vault:
+            return clip_to_vault[variant]
+    return None
+
+
 def resolve_action(target_stem: Optional[str], orig_vault: str, file_stem: str,
                    clip_to_vault: Dict[str, str], referenced: Set[str],
                    force_keep: bool = False) -> str:
     if force_keep:
         return 'keep'
-    if target_stem:
-        for variant in norm_stems(target_stem):
-            if variant in clip_to_vault:
-                tv = clip_to_vault[variant]
-                return 'keep' if tv == orig_vault else f'move:{tv}'
-    if file_stem in referenced:
-        return 'keep'
-    for variant in norm_stems(file_stem):
-        if variant in clip_to_vault:
-            tv = clip_to_vault[variant]
-            return 'keep' if tv == orig_vault else f'move:{tv}'
-    return 'trash'
+    tv = _vault_of_stem(target_stem, clip_to_vault) if target_stem else None
+    if tv is None:
+        if file_stem in referenced:
+            return 'keep'
+        tv = _vault_of_stem(file_stem, clip_to_vault)
+    if tv is None:
+        return 'trash'
+    return 'keep' if tv == orig_vault else f'move:{tv}'
 
 
 def _rel(vault_root: Path, p: Path) -> str:
@@ -148,26 +151,23 @@ def run_reconcile(vault_root: str = r'C:\Vault',
                 if target:
                     print(f'     target={target}')
 
+    # 预计算 stem→条目 索引（保持 pa_info 插入顺序，首个命中），避免 O(F×V×N) 嵌套扫描
+    pa_by_stem: Dict[str, Tuple[Path, str, str]] = {}
+    for pk, entry in pa_info.items():
+        pa_by_stem.setdefault(pk.split('/', 1)[1], entry)
+
     fe_action: Dict[str, Tuple[Path, str, str]] = {}
     for fe_key, (fe_path, fvname, pa_stem) in fe_info.items():
         pa_entry = None
         for variant in pa_stem_variants(pa_stem):
-            pa_entry = pa_info.get(f'{fvname}/{variant}')
-            if pa_entry is not None:
-                break
-            for pk in pa_info:
-                if pk.endswith(f'/{variant}'):
-                    pa_entry = pa_info[pk]
-                    break
+            pa_entry = pa_info.get(f'{fvname}/{variant}') or pa_by_stem.get(variant)
             if pa_entry is not None:
                 break
 
         if pa_entry:
             action = pa_entry[2]
-            if action.startswith('move:'):
-                fe_action[fe_key] = (fe_path, fvname, pa_entry[2])
-            else:
-                fe_action[fe_key] = (fe_path, fvname, 'keep' if action == 'keep' else 'trash')
+            fe_action[fe_key] = (fe_path, fvname, action if action.startswith('move:')
+                                 else ('keep' if action == 'keep' else 'trash'))
         else:
             fe_action[fe_key] = (fe_path, fvname, 'trash')
 
@@ -177,7 +177,8 @@ def run_reconcile(vault_root: str = r'C:\Vault',
     keep_vault: Dict[str, Dict[str, int]] = {}
     moves: List[Tuple[Path, Path, str]] = []
 
-    for info_map, ftype, subdir in [(pa_info, 'PA', 'Claude'), (pt_info, 'PT', 'Chi')]:
+    for info_map, ftype, subdir in [(pa_info, 'PA', 'Claude'), (pt_info, 'PT', 'Chi'),
+                                    (fe_action, 'FE', 'Claude')]:
         for key, (path, vname, action) in info_map.items():
             cat = action.split(':')[0]
             total[ftype][cat] += 1
@@ -188,17 +189,6 @@ def run_reconcile(vault_root: str = r'C:\Vault',
                 moves.append((path, vault_root / tv / subdir, f'{ftype} {vname}→{tv}'))
             else:
                 moves.append((path, trash_base / vname, f'{ftype}:orphan'))
-
-    for key, (path, vname, action) in fe_action.items():
-        cat = action.split(':')[0]
-        total['FE'][cat] += 1
-        if cat == 'keep':
-            keep_vault.setdefault(vname, {'PA': 0, 'FE': 0, 'PT': 0})['FE'] += 1
-        elif action.startswith('move:'):
-            tv = action.split(':', 1)[1]
-            moves.append((path, vault_root / tv / 'Claude', f'FE {vname}→{tv}'))
-        else:
-            moves.append((path, trash_base / vname, 'FE:orphan'))
 
     dupes_trashed = 0
     print()
