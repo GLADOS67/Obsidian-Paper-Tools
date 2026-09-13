@@ -6,7 +6,7 @@ from commands.pdf2md import run_pdf2md
 from commands.pmce import run_pmce
 from commands.markdown_graph import run_markdown_graph
 from commands.crossref import handle_input as crossref_handle, run_crossref_interactive
-from commands.match import run_match
+from commands.match import JACCARD_THRESHOLD, run_match
 from commands.trash import run_trash
 from commands.remove_doi import run_remove_doi
 from commands.archive import run_archive
@@ -55,14 +55,16 @@ def main():
     p_local = sub.add_parser('pdf2md-local', help='本地pdfplumber PDF转MD')
     _add_api_args(p_local, with_zip=False)
 
-    sub.add_parser('markdown', help='建立DOI引用图谱').add_argument('--path', required=True)
+    p_md = sub.add_parser('markdown', help='建立DOI引用图谱')
+    p_md.add_argument('--path', required=True)
+    p_md.add_argument('--depth', type=int, default=0, help='分文件夹统计深度(默认0仅vault级)')
 
     sub.add_parser('crossref', help='Crossref参考文献工具').add_argument('input', nargs='?', default=None, help='输入(可选)')
 
     p_match = sub.add_parser('match', help='匹配PA/PT/FE')
     p_match.add_argument('base_dir')
     p_match.add_argument('--dry-run', action='store_true')
-    p_match.add_argument('--threshold', type=float, default=0.85)
+    p_match.add_argument('--threshold', type=float, default=JACCARD_THRESHOLD)
     p_match.add_argument('--force', action='store_true')
     p_match.add_argument('-v', '--verbose', action='store_true')
 
@@ -113,7 +115,7 @@ def main():
         return
 
     handlers = {
-        'markdown': lambda: run_markdown_graph(args.path),
+        'markdown': lambda: run_markdown_graph(args.path, args.depth),
         'crossref': lambda: crossref_handle(args.input) if args.input else run_crossref_interactive(),
         'match': lambda: run_match(args.base_dir, args.dry_run, args.threshold, args.force, args.verbose),
         'trash': lambda: run_trash(args.path),

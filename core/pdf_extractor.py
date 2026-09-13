@@ -29,10 +29,6 @@ def _extract_pages(pdf_path, x_tolerance=2, y_tolerance=2):
                 for page in pdf.pages]
 
 
-def extract_text(pdf_path):
-    return '\n'.join(_extract_pages(pdf_path))
-
-
 # ── DOI extraction from pdf ──────────────────────────────────────
 
 def _pdf_pages_task(queue, pdf_path):

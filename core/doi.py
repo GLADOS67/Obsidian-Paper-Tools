@@ -87,6 +87,7 @@ PATTERN_REF_TAIL = re.compile(r'\d{1,3}\.[A-Z][a-z]{2,}')
 MAX_DOI_RAW_LEN = 200
 
 
+@lru_cache(maxsize=16384)
 def is_plausible_doi(doi: str) -> bool:
     doi = doi.strip()
     return not (

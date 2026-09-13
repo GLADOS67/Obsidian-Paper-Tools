@@ -98,17 +98,25 @@ def _resolve_doi_by_title(title: str, md_title: str, cache: dict) -> Optional[st
     return result
 
 
+def _load_md_or_pdf(file_path: Path):
+    """读取 .md（返回 fm/body）或标记 .pdf；不支持的类型返回 fm=None。"""
+    suffix = file_path.suffix.lower()
+    if suffix not in ('.md', '.pdf'):
+        return suffix, None, None, None
+    content = file_path.read_text(encoding='utf-8') if suffix == '.md' else None
+    fm, body = parse_frontmatter_str(content) if content else ({}, '')
+    return suffix, content, fm, body
+
+
 def process_file(file_path: Path, cache: dict) -> None:
     if not file_path.exists():
         print(f'文件不存在: {file_path}')
         return
-    suffix = file_path.suffix.lower()
-    if suffix not in ('.md', '.pdf'):
+    suffix, content, fm_data, _ = _load_md_or_pdf(file_path)
+    if fm_data is None:
         print(f'不支持的文件类型: {suffix}')
         return
     print(f'处理{"Markdown" if suffix == ".md" else "PDF"}: {file_path}')
-    content = file_path.read_text(encoding='utf-8') if suffix == '.md' else None
-    fm_data, _ = parse_frontmatter_str(content) if content else ({}, '')
     pdf_path = file_path if suffix == '.pdf' else None
     main_doi = _get_main_doi(pdf_path, content, fm_data)
     if not main_doi:
@@ -202,12 +210,10 @@ def _handle_doi_import_mode(main_doi: str, cache: dict) -> None:
 
 
 def _handle_takeover_mode(file_path: Path, cache: dict) -> None:
-    suffix = file_path.suffix.lower()
-    if suffix not in ('.md', '.pdf'):
+    suffix, content, fm_data, body = _load_md_or_pdf(file_path)
+    if fm_data is None:
         print(f'不支持的文件类型: {suffix}')
         return
-    content = file_path.read_text(encoding='utf-8') if suffix == '.md' else None
-    fm_data, body = parse_frontmatter_str(content) if content else ({}, '')
     print(f'￥ 接管模式: {file_path}')
     stem = file_path.stem
     fm = fm_data if suffix == '.md' else {}

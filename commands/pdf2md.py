@@ -10,9 +10,10 @@ import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from itertools import chain
 from pathlib import Path
 
-import requests
+from requests.exceptions import JSONDecodeError
 
 from core.crossref_api import (fetch_references, get_doi_from_citation,
                                get_cited_by_pubmed, get_issued_year,
@@ -21,12 +22,15 @@ from core.doi import (PATTERN_DOI, find_plausible_dois, get_main_doi,
                        normalize_unicode_dashes, process_doi, repair_doi_text)
 from core.frontmatter import (apply_cited_by, build_doi_set, cited_by_fresh,
                                dump_frontmatter, parse_frontmatter_str)
+from core.http import make_session
 from core.markdown_utils import clean_markdown_body
 from core.refs import build_existing_dois, canonicalize_stem, new_doi_wikilinks, process_existing_references
 from core import try_copy, iter_vault_dirs
 from core.pdf_extractor import convert_pdf_to_md, extract_dois_from_pdf
 from config import (DEFAULT_IMAGE_PATH, DEFAULT_MD_PATH, DEFAULT_PDF_PATH,
                     DEFAULT_ZIP_PATH, MINERU_TOKEN, OBSIDIAN_ROOT)
+
+_http = make_session()
 
 
 URL_PATTERN = re.compile(
@@ -42,8 +46,7 @@ def _build_clippings_index(vault_root: Path) -> dict:
         if not clips.is_dir():
             continue
         for md in clips.rglob('*.md'):
-            if md.stem not in index:
-                index[md.stem] = md
+            index.setdefault(md.stem, md)
     return index
 
 
@@ -68,10 +71,10 @@ def apply_upload_urls(token, files_info, url):
             'enable_table': True, 'language': 'ch'}
     status = None
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=30)
+        response = _http.post(url, headers=headers, json=data, timeout=30)
         status = response.status_code
         result = response.json()
-    except requests.exceptions.JSONDecodeError:
+    except JSONDecodeError:
         return {'success': False, 'error': f'JSON解析失败 (HTTP {status})'}
     except Exception as e:
         return {'success': False, 'error': str(e)}
@@ -115,12 +118,11 @@ def _extract_json_data(json_src):
     dois = set()
     urls = []
     try:
-        for page in content_data:
-            for block in page:
-                for text in extract_text(block):
-                    text = normalize_unicode_dashes(text)
-                    dois.update(find_plausible_dois(repair_doi_text(text)))
-                    urls.extend(URL_PATTERN.findall(text))
+        blocks = (block for page in content_data for block in page)
+        for text in chain.from_iterable(extract_text(b) for b in blocks):
+            text = normalize_unicode_dashes(text)
+            dois.update(find_plausible_dois(repair_doi_text(text)))
+            urls.extend(URL_PATTERN.findall(text))
     except Exception as e:
         print(f'解析 JSON 内容时出错 {json_src}: {e}')
     return dois, urls
@@ -233,7 +235,7 @@ def _download_zip(zip_url, zip_path, file_name, idx):
         return idx, True
     print(f'[{idx}] 下载: {file_name}')
     try:
-        r = requests.get(zip_url, stream=True, timeout=120)
+        r = _http.get(zip_url, stream=True, timeout=120)
         r.raise_for_status()
         zip_path.write_bytes(r.content)
         return idx, True
@@ -249,7 +251,7 @@ def _poll_batch_completion(batch_id, token, max_wait=1800, expected_count=None):
     files = []
     while time.time() - start < max_wait:
         try:
-            resp = requests.get(url, headers=headers, timeout=30)
+            resp = _http.get(url, headers=headers, timeout=30)
         except Exception:
             seconds = time.time() - start
             print(f'查询请求异常({seconds:.0f}s)，等待重试')
@@ -401,7 +403,7 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
 def _upload_one(f, u):
     try:
         with open(f, 'rb') as fh:
-            r = requests.put(u, data=fh, timeout=60)
+            r = _http.put(u, data=fh, timeout=60)
         # 用 with 确保上传后立即关闭文件句柄，避免占用导致后续标记完成失败
         if r.status_code == 200:
             return f

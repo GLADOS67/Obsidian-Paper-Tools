@@ -1,11 +1,13 @@
 """/s: Match Clippings to PT/PA/FE notes inside an Obsidian Vault."""
 
+from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from core.doi import PATTERN_DOI as DOI_RE
 from core.frontmatter import parse_frontmatter_file, dump_frontmatter
+from core.obsidian_path import SM_QUICK
 from core.refs import (
     WIKILINK_RE, LINK_TARGET_RE,
     parse_h1_wikilink, extract_wikilink_name, first_ref_target,
@@ -13,7 +15,7 @@ from core.refs import (
 )
 
 JACCARD_THRESHOLD = 0.85
-FUZZY_THRESHOLD = 0.7
+FUZZY_THRESHOLD = SM_QUICK
 
 
 def _extract_clippings_doi(fm: dict) -> Optional[str]:
@@ -35,6 +37,13 @@ def _jaccard(a: set, b: set) -> float:
     inter = len(a & b)
     union = len(a) + len(b) - inter
     return inter / union if union else 0.0
+
+
+def _read_text_safe(md: Path) -> str:
+    try:
+        return md.read_text(encoding='utf-8')
+    except Exception:
+        return ''
 
 
 def _chinese_title_from_text(text: str) -> Optional[str]:
@@ -62,17 +71,21 @@ def _fuzzy_best(stem: str, candidates: Dict[str, Path],
 
 
 def _pa_by_doi(pa_index: Dict[str, Path], pa_text: Dict[str, str],
-               pa_alias: Dict[str, str], doi: str) -> Tuple[Optional[Path], Optional[str], str]:
-    """在索引时缓存的 PA 正文(小写)中查找包含该 DOI 的文件，避免重复 IO。"""
-    for pa_stem, text in pa_text.items():
-        if doi in text:
-            return pa_index[pa_stem], pa_alias.get(pa_stem), 'doi'
-    return None, None, ''
+               pa_alias: Dict[str, str], doi: str,
+               memo: Dict[str, Optional[Tuple[Path, Optional[str], str]]]
+               ) -> Tuple[Optional[Path], Optional[str], str]:
+    """在索引时缓存的 PA 正文(小写)中查找包含该 DOI 的文件，避免重复 IO；memo 避免重复全文扫描。"""
+    if doi not in memo:
+        memo[doi] = next(
+            ((pa_index[s], pa_alias.get(s), 'doi') for s, t in pa_text.items() if doi in t),
+            None)
+    return memo[doi] or (None, None, '')
 
 
 def _find_pa(clip_stem: str, pa_index: Dict[str, Path],
              pa_reverse: Dict[str, Tuple[Path, str]], pa_text: Dict[str, str],
-             pa_alias: Dict[str, str], doi: Optional[str]
+             pa_alias: Dict[str, str], doi: Optional[str],
+             doi_memo: Dict[str, Optional[Tuple[Path, Optional[str], str]]]
              ) -> Tuple[Optional[Path], Optional[str], str]:
     """按 reverse → filename → doi → fuzzy 顺序定位 PA 笔记。"""
     underscore_stem = clip_stem.replace(' ', '_')
@@ -82,32 +95,12 @@ def _find_pa(clip_stem: str, pa_index: Dict[str, Path],
     if pa_path := pa_index.get(underscore_stem):
         return pa_path, pa_alias.get(pa_path.stem), 'filename'
     if doi:
-        found = _pa_by_doi(pa_index, pa_text, pa_alias, doi)
+        found = _pa_by_doi(pa_index, pa_text, pa_alias, doi, doi_memo)
         if found[0]:
             return found
     if result := _fuzzy_best(underscore_stem, pa_index):
         return result[0], pa_alias.get(result[0].stem), 'fuzzy'
     return None, None, ''
-
-
-def _match_pa(clip_md: Path, fm: dict, pa_index: Dict[str, Path],
-              pa_reverse: Dict[str, Tuple[Path, str]], pa_text: Dict[str, str],
-              pa_alias: Dict[str, str], force: bool,
-              clippings_doi_cache: Optional[str] = None):
-    existing = fm.get('paper-analyze')
-    if existing and not force:
-        return 'skipped', None
-
-    doi = _extract_clippings_doi(fm) if clippings_doi_cache is None else clippings_doi_cache
-    pa_path, alias, method = _find_pa(clip_md.stem, pa_index, pa_reverse, pa_text, pa_alias, doi)
-
-    if not pa_path:
-        return ('failed' if not existing else 'skipped'), None
-    if existing and (m := LINK_TARGET_RE.search(str(existing))) and m.group(1).strip() == pa_path.stem:
-        return 'skipped', None
-    fm['paper-analyze'] = f'[[{pa_path.stem}|{alias}]]' if alias else f'[[{pa_path.stem}]]'
-    print(f'[PA] {method:10s}  {clip_md.name} -> {pa_path.name}')
-    return 'matched', pa_path
 
 
 def _find_fe(underscore_stem: str, fe_index: Dict[str, Path],
@@ -123,21 +116,39 @@ def _find_fe(underscore_stem: str, fe_index: Dict[str, Path],
     return None, None, ''
 
 
+def _apply_found(clip_md: Path, fm: dict, key: str, existing, found, label: str):
+    """PA/FE 共用的匹配结果落地逻辑：目标未变则跳过，否则写入 wikilink。"""
+    path, alias, method = found
+    if not path:
+        return ('failed' if not existing else 'skipped'), None
+    if existing and (m := LINK_TARGET_RE.search(str(existing))) and m.group(1).strip() == path.stem:
+        return 'skipped', None
+    fm[key] = f'[[{path.stem}|{alias}]]' if alias else f'[[{path.stem}]]'
+    print(f'[{label}] {method:10s}  {clip_md.name} -> {path.name}')
+    return 'matched', path
+
+
+def _match_pa(clip_md: Path, fm: dict, pa_index: Dict[str, Path],
+              pa_reverse: Dict[str, Tuple[Path, str]], pa_text: Dict[str, str],
+              pa_alias: Dict[str, str], force: bool,
+              clippings_doi_cache: Optional[str] = None,
+              doi_memo: Optional[dict] = None):
+    existing = fm.get('paper-analyze')
+    if existing and not force:
+        return 'skipped', None
+    doi = _extract_clippings_doi(fm) if clippings_doi_cache is None else clippings_doi_cache
+    found = _find_pa(clip_md.stem, pa_index, pa_reverse, pa_text, pa_alias,
+                     doi, doi_memo if doi_memo is not None else {})
+    return _apply_found(clip_md, fm, 'paper-analyze', existing, found, 'PA')
+
+
 def _match_fe(clip_md: Path, fm: dict, fe_index: Dict[str, Path],
               fe_reverse: Dict[str, Tuple[Path, str]], force: bool):
     existing = fm.get('figure-extractor')
     if existing and not force:
         return 'skipped', None
-
-    fe_path, alias, method = _find_fe(clip_md.stem.replace(' ', '_'), fe_index, fe_reverse)
-
-    if not fe_path:
-        return ('failed' if not existing else 'skipped'), None
-    if existing and (m := LINK_TARGET_RE.search(str(existing))) and m.group(1).strip() == fe_path.stem:
-        return 'skipped', None
-    fm['figure-extractor'] = f'[[{fe_path.stem}|{alias}]]' if alias else f'[[{fe_path.stem}]]'
-    print(f'[FE] {method:10s}  {clip_md.name} -> {fe_path.name}')
-    return 'matched', fe_path
+    found = _find_fe(clip_md.stem.replace(' ', '_'), fe_index, fe_reverse)
+    return _apply_found(clip_md, fm, 'figure-extractor', existing, found, 'FE')
 
 
 def _find_chi(clip_md: Path, fm: dict, chi_reverse: Dict[str, Tuple[Path, str]],
@@ -183,8 +194,10 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     chi_display: Dict[Path, str] = {}
     chi_reverse: Dict[str, Tuple[Path, str]] = {}
 
-    for md in sorted(chi_dir.rglob('*.md')):
-        fm, _ = parse_frontmatter_file(md)
+    chi_mds = sorted(chi_dir.rglob('*.md'))
+    with ThreadPoolExecutor() as ex:  # IO并行，字典更新保持原顺序串行
+        chi_parsed = list(ex.map(parse_frontmatter_file, chi_mds))
+    for md, (fm, _) in zip(chi_mds, chi_parsed):
         if not fm:
             continue
         src = (fm.get('source') or '').strip().lower().rstrip('/')
@@ -212,7 +225,10 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
 
     claude_dir = base / 'Claude'
     if claude_dir.is_dir():
-        for md in sorted(claude_dir.rglob('*.md')):
+        claude_mds = sorted(claude_dir.rglob('*.md'))
+        with ThreadPoolExecutor() as ex:  # IO并行读取正文
+            claude_texts = list(ex.map(_read_text_safe, claude_mds))
+        for md, text in zip(claude_mds, claude_texts):
             stem = md.stem
             if 'zh-CN' in stem:
                 continue
@@ -220,10 +236,6 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
                 fe_index[stem[:-8]] = md
                 continue
             pa_index[stem] = md
-            try:
-                text = md.read_text(encoding='utf-8')
-            except Exception:
-                text = ''
             pa_text[stem] = text.lower()
             if h1_info := parse_h1_wikilink(text):
                 clip_stem, ch_title = h1_info
@@ -251,6 +263,7 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
         'pa': {'matched': 0, 'skipped': 0, 'failed': 0},
         'fe': {'matched': 0, 'skipped': 0, 'failed': 0},
     }
+    doi_memo: Dict[str, Optional[Tuple[Path, Optional[str], str]]] = {}
 
     for clip_md in sorted(clip_dir.rglob('*.md')):
         fm, body = parse_frontmatter_file(clip_md)
@@ -293,7 +306,7 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
 
         clip_doi_value = _extract_clippings_doi(fm)
         pa_result, pa_path = _match_pa(clip_md, fm, pa_index, pa_reverse, pa_text,
-                                       pa_alias, force, clip_doi_value)
+                                       pa_alias, force, clip_doi_value, doi_memo)
         stats['pa']['matched'] += pa_result == 'matched'
         stats['pa']['skipped'] += pa_result == 'skipped'
         stats['pa']['failed'] += pa_result == 'failed'

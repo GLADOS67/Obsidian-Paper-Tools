@@ -45,6 +45,8 @@ MSID_RE = re.compile(
 )
 SOURCE_EXT_RE = re.compile(r'\.(?:qxd|indd|docx?|pptx?|ai|cdr|psd|pub|idml)\b', re.IGNORECASE)
 STATUS_SET = frozenset(STATUS_MARKERS)
+ET_AL_RE = re.compile(r',?\s+et\s+al\.?\s*$', re.IGNORECASE)
+WS_RE = re.compile(r'\s+')
 _FILENAME_STRIP_TABLE = str.maketrans({c: '' for c in r'<>:"/\|?*'})
 
 
@@ -78,11 +80,11 @@ def _clean_title(raw_title):
             title = title[idx + len(marker):].strip()
             tlower = title.lower()
             break
-    title = re.sub(r',?\s+et\s+al\.?\s*$', '', title, flags=re.IGNORECASE)
+    title = ET_AL_RE.sub('', title)
     m = AUTHOR_DEGREE_RE.search(title)
     if m:
         title = title[:m.start()].strip()
-    return re.sub(r'\s+', ' ', title).strip(' ,-')
+    return WS_RE.sub(' ', title).strip(' ,-')
 
 
 def _get_metadata_title(doc):
@@ -181,11 +183,8 @@ def _sanitize_filename(title):
 def _process_one_pdf(pdf_path: Path, names_taken: set, lock: threading.Lock) -> tuple:
     title = None
     try:
-        doc = fitz.open(pdf_path)
-        try:
+        with fitz.open(pdf_path) as doc:
             title = _get_metadata_title(doc) or _get_first_page_title(doc)
-        finally:
-            doc.close()
     except Exception as e:
         return ('skip', pdf_path, str(e))
     title = _clean_title(title) if title else ''

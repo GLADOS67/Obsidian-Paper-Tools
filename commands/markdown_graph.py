@@ -30,7 +30,7 @@ def _parse_cited_by_entry(cb_item) -> Optional[Tuple[str, str]]:
 
 def _update_doi_map(display_doi: str, name_part: str,
                     unique_map: Dict[str, DoiEntry],
-                    citing_stem: str, slot: int = 0):
+                    citing_stem: str, slot: int = 0) -> DoiEntry:
     is_special = not PATTERN_SAFE_DOI.match(name_part)
     key = display_doi.lower()
     entry = unique_map.get(key)
@@ -39,6 +39,7 @@ def _update_doi_map(display_doi: str, name_part: str,
     if not entry[slot][0]:
         entry[slot][0] = name_part if is_special else None
     entry[slot][1][citing_stem] = None
+    return entry
 
 
 def _rebuild_reference_list(refs: List, unique_map: Dict[str, DoiEntry],
@@ -69,8 +70,7 @@ def _rebuild_reference_list(refs: List, unique_map: Dict[str, DoiEntry],
             continue
         seen.add(dedup_key)
         if citing_stem is not None:
-            _update_doi_map(display_doi, name_part, unique_map, citing_stem)
-            entry = unique_map[dedup_key]
+            entry = _update_doi_map(display_doi, name_part, unique_map, citing_stem)
             used_name = entry[0][0] or entry[1][0] or process_doi(display_doi)[1]
             special_count += int(not PATTERN_SAFE_DOI.match(name_part))
         else:
@@ -151,7 +151,62 @@ def _process_one_file(file: Path, unique_map: Dict[str, DoiEntry],
     return (file, fm, rest)
 
 
-def run_markdown_graph(directory: str) -> None:
+class FolderStats:
+    __slots__ = ('path',)
+
+    def __init__(self, path: Path):
+        self.path = path
+
+    def compute_and_print(self):
+        md_files = sorted(self.path.rglob('*.md'))
+        if not md_files:
+            return
+        unique_map: Dict[str, DoiEntry] = {}
+        cited_by_map: Dict[str, Tuple[str, List[str]]] = {}
+        for f in md_files:
+            try:
+                content = normalize_unicode_dashes(f.read_text(encoding='utf-8'))
+            except Exception:
+                continue
+            fm, _ = parse_frontmatter_str(content)
+            if not isinstance(fm, dict):
+                continue
+            for ref in fm.get('reference', []):
+                ref = ref.strip()
+                if not ref:
+                    continue
+                parsed = split_wikilink(ref)
+                if parsed:
+                    display_doi, name_part = process_doi(parsed[1])[0], parsed[0]
+                    if is_plausible_doi(display_doi):
+                        _update_doi_map(display_doi, name_part, unique_map, f.stem, slot=0)
+            for item in fm.get('cited_by', []):
+                if p := _parse_cited_by_entry(item):
+                    name, disp = p
+                    dl = disp.lower()
+                    cited_by_map.setdefault(dl, (disp, []))
+                    if f.stem not in cited_by_map[dl][1]:
+                        cited_by_map[dl][1].append(f.stem)
+                    _update_doi_map(disp, name, unique_map, f.stem, slot=1)
+        rel = self.path.name
+        print(f'\n📁 {rel}')
+        missing = [(doi, entry[0][1]) for doi, entry in unique_map.items()
+                   if entry[0][0] is None and entry[1][0] is None]
+        if missing:
+            doi, stems = max(missing, key=lambda x: len(x[1]))
+            print(f'🏆 引用最多的目前不存在的DOI：{doi} （被引 {len(stems)} 次）')
+        else:
+            print('未找到符合条件的目前不存在的DOI')
+        external_cited = {k: v for k, v in cited_by_map.items()
+                          if _shared_spec(unique_map.get(k)) is None}
+        if external_cited:
+            doi_lower, (disp, stems) = max(external_cited.items(), key=lambda x: len(x[1][1]))
+            print(f'🏆 cited_by 出现最多的目前不存在的外部 DOI：{disp} （被 {len(stems)} 篇论文收录）')
+        else:
+            print('未找到符合条件的目前不存在的外部 cited_by DOI')
+
+
+def run_markdown_graph(directory: str, depth: int = 0) -> None:
     target = Path(directory)
     md_files = sorted(target.rglob('*.md'))
     print(f'找到 {len(md_files)} 个MD文件，开始处理...\n')
@@ -189,6 +244,16 @@ def run_markdown_graph(directory: str) -> None:
         except Exception as e:
             print(f'  ❌ {file.name} 保存失败 → {str(e)}')
 
+    if depth > 0:
+        all_folders = []
+        for d in range(1, depth + 1):
+            tier = sorted(p for p in target.rglob('*')
+                          if p.is_dir() and len(p.relative_to(target).parts) == d
+                          and any(p.rglob('*.md')))
+            all_folders.extend(tier)
+        for folder in all_folders:
+            FolderStats(folder).compute_and_print()
+
     print('\n🎉 全部处理完成！')
     missing = [(doi, ref[1]) for doi, (ref, cb) in unique_map.items() if ref[0] is None and cb[0] is None]
     if missing:
@@ -201,6 +266,6 @@ def run_markdown_graph(directory: str) -> None:
                       if _shared_spec(unique_map.get(k)) is None}
     if external_cited:
         doi_lower, (disp, stems) = max(external_cited.items(), key=lambda x: len(x[1][1]))
-        print(f'\n🏆 cited_by 出现最多的目前不存在的外部 DOI：{disp} （被 {len(stems)} 篇论文收录）')
+        print(f'🏆 cited_by 出现最多的目前不存在的外部 DOI：{disp} （被 {len(stems)} 篇论文收录）')
     else:
-        print('\n未找到符合条件的目前不存在的外部 cited_by DOI')
+        print('未找到符合条件的目前不存在的外部 cited_by DOI')

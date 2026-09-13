@@ -5,21 +5,19 @@ import random
 import re
 import time
 import xml.etree.ElementTree as ET
+from collections import Counter
 from difflib import SequenceMatcher
 from pathlib import Path
 
-import requests
-
 from core.doi import (PATTERN_DOI, PATTERN_FS_INVALID, find_plausible_dois,
                       normalize_unicode_dashes, process_doi)
+from core.http import make_session
 from commands.markdown_graph import run_markdown_graph
-from config import USER_AGENT
 
 EUPMC_BASE = 'https://www.ebi.ac.uk/europepmc/webservices/rest'
 XLINK = '{http://www.w3.org/1999/xlink}href'
 
-_http = requests.Session()
-_http.headers.update({'User-Agent': USER_AGENT})
+_http = make_session()
 
 PATTERN_PMID_LABELED = re.compile(r'PMID:?\s*(\d{6,9})', re.IGNORECASE)
 PATTERN_PMC_ID = re.compile(r'PMC\d+', re.IGNORECASE)
@@ -148,11 +146,6 @@ def _match_one(results, kind, val):
     return best if best_score >= _TITLE_SIM else None
 
 
-def _fetch_fulltext_xml(pmcid):
-    resp = _eupmc_get(f'{EUPMC_BASE}/{pmcid}/fullTextXML')
-    return resp.text if resp is not None else None
-
-
 FIG_URL_CACHE = {}
 
 
@@ -160,9 +153,8 @@ def _get_figure_urls(pmcid):
     if pmcid in FIG_URL_CACHE:
         return FIG_URL_CACHE[pmcid]
     try:
-        r = requests.get(
-            f'https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?format=json',
-            timeout=30, headers={'User-Agent': USER_AGENT})
+        r = _http.get(f'https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?format=json',
+                      timeout=30)
         if r.status_code != 200:
             return {}
     except Exception:
@@ -383,10 +375,8 @@ def run_pmce(input_arg, path, no_graph=False, dry_run=False):
     pending.mkdir(parents=True, exist_ok=True)
     text = _read_input(input_arg)
     items = _extract_identifiers(text)
-    n_doi = sum(1 for k, _ in items if k == 'doi')
-    n_pmid = sum(1 for k, _ in items if k == 'pmid')
-    n_title = sum(1 for k, _ in items if k == 'title')
-    print(f'识别标识 {len(items)} 个（DOI {n_doi} / PMID {n_pmid} / 标题 {n_title}）')
+    counts = Counter(k for k, _ in items)
+    print(f'识别标识 {len(items)} 个（DOI {counts["doi"]} / PMID {counts["pmid"]} / 标题 {counts["title"]}）')
     if not items:
         return
 
@@ -421,7 +411,8 @@ def run_pmce(input_arg, path, no_graph=False, dry_run=False):
         if stem.lower() in used:
             target = pending / f'{stem}_{meta["pmcid"]}.md'
         used.add(stem.lower())
-        xml = _fetch_fulltext_xml(meta['pmcid'])
+        resp = _eupmc_get(f'{EUPMC_BASE}/{meta["pmcid"]}/fullTextXML')
+        xml = resp.text if resp is not None else None
         if xml is None:
             non_oa.append(meta)
             continue
@@ -433,8 +424,8 @@ def run_pmce(input_arg, path, no_graph=False, dry_run=False):
             print(f'解析失败 {meta.get("id")}: {e}')
         time.sleep(random.uniform(2.0, 4.0))
 
-    _print_non_oa(non_oa)
     print(f'\n写入 {len(written)} 个MD → {pending}')
     if written and not no_graph:
         print('建立引用图谱...')
         run_markdown_graph(str(pending.parent))
+    _print_non_oa(non_oa)

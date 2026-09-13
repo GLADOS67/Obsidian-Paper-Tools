@@ -11,6 +11,11 @@ from config import DEFAULT_IMAGE_PATH, OBSIDIAN_ROOT
 PATTERN_IMG = re.compile(r'!\[[^\]]*\]\(([^)]+)\)')
 
 
+def image_names(images_dir: Path) -> set:
+    """images_dir 下所有实际存在的图片文件名集合。"""
+    return {f.name for f in images_dir.iterdir() if f.is_file()}
+
+
 def _scan_one(md_path: Path) -> set:
     try:
         text = md_path.read_text(encoding='utf-8')
@@ -57,7 +62,7 @@ def run_clean_images(path_vault=None, path_images=None, path_trash=None):
     images_dir = Path(path_images or DEFAULT_IMAGE_PATH)
     trash_dir = Path(path_trash or (vault / 'TRASH' / 'Image'))
 
-    actual_files = {f.name for f in images_dir.iterdir() if f.is_file()}
+    actual_files = image_names(images_dir)
     print(f'IMAGE目录文件: {len(actual_files)}')
 
     md_files = list(vault.rglob('*.md'))

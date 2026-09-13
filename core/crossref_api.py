@@ -2,23 +2,34 @@
 
 import json
 import random
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import requests
-
 from core.doi import process_doi
+from core.http import make_session
 
-from config import CROSSREF_CACHE, CROSSREF_MAILTO, USER_AGENT
+from config import CROSSREF_CACHE, CROSSREF_MAILTO
 CROSSREF_API_BASE = 'https://api.crossref.org/works'
 
-_http = requests.Session()
-_http.headers.update({'User-Agent': USER_AGENT})
+_http = make_session()
+
+_PUBDATE_RE = re.compile(r'(\d{4})/(\d{2})/(\d{2})')
+
+
+def _parse_pubdate(raw: str) -> Optional[datetime]:
+    """等价于 strptime(raw[:10], '%Y/%m/%d')，非法输入返回 None（零填充格式下结果一致且更快）。"""
+    m = _PUBDATE_RE.match(raw)
+    if not m:
+        return None
+    try:
+        return datetime(*map(int, m.groups()))
+    except ValueError:
+        return None
 
 
 def _polite_sleep(lo: float = 1.0, hi: float = 2.0) -> None:
@@ -202,11 +213,8 @@ def get_cited_by_pubmed(doi: str, cache: dict = None,
             item = results.get(str(pmid_id))
             if not item:
                 continue
-            try:
-                pubdate = datetime.strptime(item.get('sortpubdate', '')[:10], '%Y/%m/%d')
-            except Exception:
-                continue
-            if pubdate < cutoff:
+            pubdate = _parse_pubdate(item.get('sortpubdate', ''))
+            if pubdate is None or pubdate < cutoff:
                 continue
             doi_val = next((aid.get('value') for aid in item.get('articleids', [])
                             if aid.get('idtype') == 'doi'), None)

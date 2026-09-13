@@ -69,7 +69,8 @@ def run_archive(source: str, target: str) -> None:
         dst_dir = dst_dir / 'PENDING'
 
     dst_dir.mkdir(parents=True, exist_ok=True)
-    rows = [('.md', _copy_file(src, dst_dir / src.name), dst_dir / src.name)]
+    dst_md = dst_dir / src.name
+    rows = [('.md', _copy_file(src, dst_md), dst_md)]
 
     src_claude = (src_vault_sub / 'Claude') if src_vault_sub else None
     src_chi = (src_vault_sub / 'Chi') if src_vault_sub else None
@@ -90,13 +91,12 @@ def run_archive(source: str, target: str) -> None:
         rows.append((label, _copy_file(target_path, dst),
                      dst if target_path.exists() else target_path))
 
-    if pa_name and src_vault_sub:
-        src_claude_dir = src_vault_sub / 'Claude'
+    if pa_name and src_claude:
         tgt = _norm(pa_name)
-        for figs in src_claude_dir.glob('*_figures.md'):
+        figs_dst = dst_claude / f'{tgt}_figures.md'
+        for figs in src_claude.glob('*_figures.md'):
             if _norm(figs.stem) == f'{tgt}_figures':
-                rows.append(('Figures', _copy_file(figs, dst_claude / f'{tgt}_figures.md'),
-                             dst_claude / f'{tgt}_figures.md'))
+                rows.append(('Figures', _copy_file(figs, figs_dst), figs_dst))
 
     status_map = {'hardlinked': '硬链接', 'copied': '已复制',
                   'exists': '跳过(已存在)', 'not found': '未找到'}

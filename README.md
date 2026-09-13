@@ -4,7 +4,7 @@
 
 ---
 
-# Obsidian-Paper-Tools 3.3 — 织命者卡洛斯
+# Obsidian-Paper-Tools 3.4 — 织命者卡洛斯
 
 > Obsidian. Our Vault. 🔗 Links. 🧠 Graph. 📂 Open formats.
 > Our way of research.
@@ -36,7 +36,7 @@
 >
 > BECOME A VAULTTOOLER.
 >
-> *— Cloud & local PDF-to-Markdown · PDF metadata extraction · Image GC · Reconcile PA/PT/FE links · DOI citation graph · PubMed API · PubMed MeSH Concept Explorer · Unicode symbol unification · note matching & archiving*
+> *— Cloud & local PDF-to-Markdown · PDF metadata extraction · Image GC · Reconcile PA/PT/FE links · DOI citation graph · PubMed API · PubMed MeSH Concept Explorer · Crossref/PubMed HTTP session · Unicode symbol unification · note matching & archiving*
 
 ---
 
@@ -372,6 +372,16 @@ vaultools pmce paper.md --path C:\Vault\PENDING
 
 ---
 
+### `http` — Shared Crossref/PubMed HTTP Session / 共享 Crossref/PubMed HTTP 会话 (core)
+
+`core/http.py` provides a shared `requests.Session` with retry, rate-limit, and a unified user-agent, reused by all Crossref API and PubMed E-utilities calls to avoid throttling and duplicate connection setup.
+
+| Function | Purpose |
+| --- | --- |
+| `make_session` | Create a shared session with a unified User-Agent |
+
+---
+
 ## Configuration
 
 Edit `config.py` before first use:
@@ -415,6 +425,7 @@ DEFAULT_IMAGE_PATH = Path(r'C:\Vault\IMAGE')
 │   ├── crossref_api.py    # Crossref + PubMed E-utilities API
 │   ├── doi.py             # DOI regex / repair / canonicalization
 │   ├── frontmatter.py     # YAML frontmatter parse/dump
+│   ├── http.py            # Shared Crossref/PubMed HTTP session (retry, rate-limit, user-agent)
 │   ├── markdown_utils.py  # Markdown body cleaning
 │   ├── obsidian_path.py   # Obsidian URI resolution
 │   ├── pdf_extractor.py   # pdfplumber/PyMuPDF PDF metadata & first-page title extraction
@@ -479,7 +490,7 @@ MIT
 
 **作者：** Li Kan <lik1453529@163.com>
 
-# Obsidian-Paper-Tools 3.3 — 织命者卡洛斯
+# Obsidian-Paper-Tools 3.4 — 织命者卡洛斯
 
 > Obsidian。Our Vault。🔗 双向链接。🧠 关系图谱。📂 开放格式。
 > 我们的科研之道。
@@ -511,7 +522,7 @@ MIT
 >
 > 成为 VAULTTOOLER。
 >
-> *— 云端与本地 PDF 转 Markdown · PDF 元数据提取 · 图片垃圾回收 · DOI 引用图谱 · Crossref 缓存清洗 · PubMed API · PubMed MeSH 概念探索 · PyMuPDF 重命名 · 字符统一 · 笔记匹配与归档*
+> *— 云端与本地 PDF 转 Markdown · PDF 元数据提取 · 图片垃圾回收 · DOI 引用图谱 · Crossref 缓存清洗 · PubMed API · PubMed MeSH 概念探索 · Crossref/PubMed HTTP 会话 · PyMuPDF 重命名 · 字符统一 · 笔记匹配与归档*
 
 ---
 
@@ -813,6 +824,16 @@ vaultools pmce paper.md --path C:\Vault\PENDING
 
 ---
 
+### `http` — 共享 Crossref/PubMed HTTP 会话（core）
+
+`core/http.py` 提供带重试、限速与统一 User-Agent 的共享 `requests.Session`，供所有 Crossref API 与 PubMed E-utilities 调用复用，避免触发限流并减少重复建连。
+
+| 函数 | 用途 |
+| --- | --- |
+| `make_session` | 创建带统一 User-Agent 的共享会话 |
+
+---
+
 ## 配置
 
 首次使用前编辑 `config.py`：
@@ -856,6 +877,7 @@ DEFAULT_IMAGE_PATH = Path(r'C:\Vault\IMAGE')
 │   ├── crossref_api.py    # Crossref + PubMed E-utilities API
 │   ├── doi.py             # DOI 正则 / 修复 / 规范化
 │   ├── frontmatter.py     # YAML frontmatter 解析/写入
+│   ├── http.py            # Crossref/PubMed 共享 HTTP 会话（重试、限速、UA）
 │   ├── markdown_utils.py  # Markdown 正文清理
 │   ├── obsidian_path.py   # Obsidian URI 解析
 │   ├── pdf_extractor.py   # pdfplumber/PyMuPDF PDF 元数据与首页标题提取
@@ -919,44 +941,44 @@ MIT
 
 ## 增量对比 (vs v3.3)
 
-对比范围：`*.py` / `*.toml` / `*.md`（排除 `__pycache__` 字节码产物）。两项目源文件集合完全一致，**无新增、无移除文件**；共 22 个源文件内容发生改动。
+对比范围：`*.py` / `*.toml` / `*.md`（排除 `__pycache__` 字节码产物）。v3.3 全部源文件在 v3.4 中均保留，**无移除文件**；v3.4 新增 1 个文件（`core/http.py`）；其余 21 个源文件内容发生改动。
 
-**逐文件对比：**
-
-| 维度 | v3.3 | v3.3 |
+| 维度 | v3.3 | v3.4 |
 | --- | --- | --- |
-| **新增文件** | — | 无（两项目 `*.py`/`*.toml`/`*.md` 文件集合完全一致） |
+| **新增文件** | — | `core/http.py`（共享 Crossref/PubMed HTTP 会话） |
 | **移除文件** | 无 | — |
-| **config.py** | 仅路径常量 | 新增 `USER_AGENT`（Chrome/Edge 浏览器 UA 字符串），供 crossref_api/pmce 复用 |
-| **cli.py** | 14 个命令用 if/elif 长链分派 | 改为 `handlers` 字典（lambda/函数引用）+ `handlers.get(cmd)` walrus 分派，行为等价 |
-| **core/__init__.py** | 仅 `is_vault_dir`/`try_copy` | 新增 `iter_vault_dirs()` 生成器（排序+过滤 vault 目录），供 reconcile/pdf2md/unify_symbols 复用 |
-| **core/obsidian_path.py** | `_try_suffix` 辅助函数 + 内联正则 | 预编译 `_GLOB_ESCAPE_RE`；删除 `_try_suffix`，`resolve_input_path` 内联 `.with_suffix('.md')` |
-| **core/frontmatter.py** | `build_doi_set` 串行循环 | 新增 `apply_cited_by()`（统一写 cited_by_date/cited_by）与 `_collect_file_dois()`；`build_doi_set` 改用 `ThreadPoolExecutor + ex.map` 并行收集 |
-| **core/doi.py** | `get_main_doi` 用 `find_plausible_dois` 全量扫描取首项 | 改 `PATTERN_DOI.finditer` + `is_plausible_doi` 逐条判断，命中即返回 |
-| **core/refs.py** | `first_ref_target` 内联 WIKILINK_RE 匹配 | 委托 `extract_wikilink_name` 复用 |
-| **core/pdf_extractor.py** | `result_queue.get()` 先判空 | 改 `get_nowait()` + `except queue.Empty` |
-| **core/crossref_api.py** | 本地常量 UA；四处 `time.sleep(random.uniform(1,2))`；内联 ref 构建 | UA 改从 `config` 导入；新增 `_polite_sleep()`/`_ref_entry()` 辅助；walrus + `_fresh()` 过滤缓存 |
-| **commands/archive.py** | `_norm` 每次 `re.sub` | 预编译 `_DASH_RE`；调整 `PATTERN_WIKILINK` 定义位置 |
-| **commands/trash.py** | `_extract_entry` 辅助函数 | 删除辅助，`_restore_missing` 内联解压 |
-| **commands/rename_pdf.py** | `_get_first_page_title` 循环累加 spans；failed/skip 两分支打印 | 改列表推导 + walrus；合并为 `tag/sep` 单分支打印 |
-| **commands/pmce.py** | 本地 UA 常量；`requests.get`；表格转 Markdown 管道表；图片用 `/bin/{href}.jpg` 硬编码 | UA 导入 config；模块级 `requests.Session`；新增 `_get_figure_urls()`（从 PMC JSON 解析真实 CDN 图 URL）+ `FIG_URL_CACHE`；表格改输出 HTML `<table>`；`_fig_md` 用真实图 URL |
-| **commands/markdown_graph.py** | `_process_unhandled_file` 独立函数；cited_by 解析/DOI 提取在锁内 | 删除辅助函数并入 `_process_one_file`；解析与提取移到锁外（锁仅保护共享 map 写入）；`_resolve_self_doi` 用 `split_wikilink` |
-| **commands/reconcile.py** | 三处内联 `sorted+is_vault_dir`；重复检测 if/else | 改用 `iter_vault_dirs`；`is_dupe`/`extra` 改布尔与条件表达式 |
-| **commands/unify_symbols.py** | `_find_changed_files` + `_collect_md_files` 两次扫描 | 合并为单次 `_scan_vault()` 返回（md_files, changed, changed_paths）；`link_map` 同时含旧/新 stem；重命名直接遍历 `changed_paths` |
-| **commands/pdf2md.py** | `_update_cited_by` 内联写字段 | 委托 `apply_cited_by`；改用 `iter_vault_dirs`；`_poll_batch_completion` 新增 `files=[]` 初始化（修复） |
-| **commands/clean_images.py** | `_extract_local_names` 独立函数 | 合并入 `_scan_one`；URL 判断提前到路径规范化之前 |
-| **commands/match.py** | `_match_pa`/`_match_fe` 内联 reverse→filename→doi/fuzzy 逻辑 | 提取 `_find_pa`/`_find_fe` 辅助函数 |
-| **commands/cited_by.py** | 内联写 cited_by 字段（datetime/make_wikilink） | 委托 `apply_cited_by` |
-| **README.md** | 结尾含「增量对比 (vs v3.2)」章节（约 44 行） | 删除该章节，文末止于「许可证 / MIT」；本次在其后追加本对比 |
-| **pyproject.toml** | 同 | 完全一致（未变） |
-| **commands/__init__.py、core/markdown_utils.py、commands/remove_doi.py、scripts/** | 同 | 完全一致（未变） |
+| **cli.py** | `markdown` 命令仅 `--path`；`match --threshold` 硬编码 0.85 | 新增 `--depth`（分文件夹统计深度，默认 0）；阈值改用 `JACCARD_THRESHOLD` 常量；`run_markdown_graph(args.path, args.depth)` |
+| **pyproject.toml** | description 提及 "pmce (PubMed MeSH Concept Explorer)" | description 改为 "shared HTTP session (retry/rate-limit)" |
+| **core/__init__.py** | docstring 不含 http | docstring 加入 http 模块 |
+| **core/doi.py** | `is_plausible_doi` 无缓存 | 加 `@lru_cache(maxsize=16384)` |
+| **core/frontmatter.py** | 提供 `read_fm()` 辅助 | 删除 `read_fm()`，`_collect_file_dois` 内联 `parse_frontmatter_file(...)[0] or {}` |
+| **core/obsidian_path.py** | 候选元组 for 循环 | 简化为单一 `candidate` 变量判断 |
+| **core/pdf_extractor.py** | 含 `extract_text()` | 删除未使用的 `extract_text()` |
+| **core/crossref_api.py** | 本地 `requests.Session` + 直接 `import requests`；strptime 解析出版日期 | 改用 `make_session()`；新增 `_parse_pubdate()` 正则解析（非法输入返回 None，等价且更快） |
+| **core/http.py** | 不存在 | 新增：`make_session()` 返回带统一 User-Agent 的共享 `requests.Session` |
+| **commands/archive.py** | 重复 `dst_dir/src.name` 计算、局部 `src_vault_sub/'Claude'` | 复用 `dst_md`/`src_claude`/`figs_dst` 变量 |
+| **commands/clean_images.py** | `actual_files` 集合推导内联 | 提取 `image_names()` 辅助函数，供 run_clean_images 与 trash 复用 |
+| **commands/crossref.py** | `process_file`/`_handle_takeover_mode` 各自解析后缀/内容 | 提取 `_load_md_or_pdf()` 统一读取 .md/.pdf |
+| **commands/markdown_graph.py** | 仅全局统计；`_update_doi_map` 不返回值 | `_update_doi_map` 返回 entry；新增 `FolderStats` 类按 `--depth` 分文件夹统计；微调 trophy 打印（去掉多余空行） |
+| **commands/match.py** | PA/DOI 全文扫描无记忆；Chi/Claude 串行 IO | 新增 `doi_memo` 缓存避免重复扫描；ThreadPoolExecutor 并行读取；`_apply_found` 统一 PA/FE 落地逻辑；`FUZZY_THRESHOLD = SM_QUICK` |
+| **commands/pdf2md.py** | 直接 `requests.get/post/put`；`extract_text` 嵌套循环 | 改用共享 `make_session()`；JSONDecodeError 导入路径修正；生成器 + `chain.from_iterable` 展平块 |
+| **commands/pmce.py** | 本地 `requests.Session`；`_fetch_fulltext_xml` 辅助；手写三项计数；`_print_non_oa` 在图前 | 改用 `make_session()`；删除辅助并内联；`Counter` 统计；`_print_non_oa` 移到图建立之后 |
+| **commands/reconcile.py** | 解析串行；PA 逻辑内联于循环 | ThreadPoolExecutor 并行解析 frontmatter/PA/PT；`pa_targets` 预计算字典 |
+| **commands/rename_pdf.py** | `re.sub` 内联；`fitz.open` 手动 close | 预编译 `ET_AL_RE`/`WS_RE`；`with fitz.open()` 上下文管理 |
+| **commands/trash.py** | `_scan_referenced`/内联集合推导 | 删除辅助，`run_trash` 内联；改用 `image_names()` |
+| **commands/unify_symbols.py** | 串行读改写 | 提取 `_fix_one()` + ThreadPoolExecutor 并行读写 |
+| **README.md** | 文末含「增量对比 (vs v3.3)」章节 | 删除该章节，文末止于「许可证 / MIT」；新增 `http` 章节与目录结构条目；本对比为其后追加 |
 
 ### 关键变化
-- **共享 `USER_AGENT`**：config.py 新增 UA 常量，crossref_api/pmce 删除本地重复定义并改为导入。
-- **`iter_vault_dirs()` 统一 vault 遍历**：core/__init__.py 新增生成器，reconcile.py、pdf2md.py、unify_symbols.py 中重复的 `sorted(iterdir())+is_vault_dir` 模式全部替换。
-- **cited_by 写入集中化**：core/frontmatter.py 新增 `apply_cited_by()`，cited_by.py 与 pdf2md.py 统一复用。
-- **PMCE 图片与表格增强**：pmce.py 从 PMC JSON 解析真实 CDN 图片 URL（带缓存），JATS 表格改为输出 HTML `<table>`（保留 colspan/rowspan），不再生成丢失图片的硬编码链接。
-- **并发收集**：frontmatter `build_doi_set` 由串行改为 `ThreadPoolExecutor` 并行；markdown_graph 把解析移到锁外，锁仅保护共享 map 写入。
-- **多文件循环重构**：cli.py 命令分派改字典；markdown_graph 删除 `_process_unhandled_file`；unify_symbols 单次扫描 `_scan_vault`；match 提取 `_find_pa`/`_find_fe`。
-- **Bug/健壮性修复**：pdf_extractor 改用 `get_nowait` 防队列空阻塞；pdf2md `_poll_batch_completion` 补 `files=[]` 初始化；clean_images 调整 URL 判断顺序。
-- **README**：移除上一轮「vs v3.2」增量章节，文末恢复为纯「许可证 MIT」，本对比章节为新增内容。
+
+- **新增 `core/http.py`**：全项目统一 HTTP 入口 `make_session()`，统一 User-Agent，crossref_api / pmce / pdf2md 全部改用共享会话（连接池复用、避免限流）。
+- **并行 IO 提速**：match / reconcile / unify_symbols 用 `ThreadPoolExecutor` 并行读取与解析（字典更新保持串行保序）；pdf2md 的 `_extract_json_data` 用生成器 + `chain` 展平。
+- **DOI 全文查找记忆化**：match 的 `_pa_by_doi` 新增 `doi_memo`，同一 DOI 只做一次全量扫描。
+- **`is_plausible_doi` 加缓存**：`@lru_cache(maxsize=16384)` 避免重复正则校验。
+- **出版日期解析优化**：crossref_api 用 `_parse_pubdate` 正则替代 `strptime`，非法输入返回 None 继续处理（不再抛异常跳过）。
+- **markdown 命令支持 `--depth`**：按文件夹层级输出各子目录引用图谱统计（`FolderStats`）。
+- **删除死代码**：frontmatter `read_fm`、pdf_extractor `extract_text`、pmce `_fetch_fulltext_xml`、trash `_scan_referenced` 等辅助函数被移除或内联。
+- **Bug/健壮性**：rename_pdf 改用 `with fitz.open()` 确保关闭；pmce 将 `_print_non_oa` 移到图谱建立后，避免图构建失败时遗漏输出。
+- **README**：移除上一轮「vs v3.3」章节，文末恢复为纯「许可证 MIT」，并在英中两处新增 `http` 模块文档；本对比章节为新增内容。
+
+> 注：`scripts/存档/PMCE.bat` 在 v3.4 也有改动（不在 `*.py`/`*.toml`/`*.md` 对比范围内，未详列）。

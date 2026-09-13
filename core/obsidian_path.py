@@ -75,9 +75,8 @@ def resolve_input_path(input_str: str, fallback_search: bool = False) -> Optiona
     if full_path.exists():
         return full_path
     md_candidate = full_path.with_suffix('.md')
-    for candidate in (md_candidate if md_candidate.exists() else None,
-                      _try_strip_dot(full_path)):
-        if candidate:
-            return candidate
+    candidate = md_candidate if md_candidate.exists() else _try_strip_dot(full_path)
+    if candidate:
+        return candidate
     fuzzy = _fuzzy_search(full_path.parent, full_path.stem.strip('. \t').rstrip('.'))
     return fuzzy or (_fallback_search(file_clean) if fallback_search else None)

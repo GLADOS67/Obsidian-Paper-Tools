@@ -3,6 +3,7 @@
 import re
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -43,11 +44,13 @@ def build_clippings_index(vault_root: Path) -> Tuple[Dict[str, str], Set[str], S
         clip_dir = vault_dir / 'Clippings'
         if not clip_dir.is_dir():
             continue
-        for md in sorted(clip_dir.rglob('*.md')):
+        mds = sorted(clip_dir.rglob('*.md'))
+        with ThreadPoolExecutor() as ex:  # IO并行解析，索引更新保持原顺序串行
+            parsed = list(ex.map(parse_frontmatter_file, mds))
+        for md, (fm, _) in zip(mds, parsed):
             stem = md.stem
             for variant in norm_stems(stem):
                 clip_to_vault.setdefault(variant, vault_dir.name)
-            fm, _ = parse_frontmatter_file(md)
             if not fm:
                 continue
             if pa := extract_wikilink_name(fm.get('paper-analyze')):
@@ -111,28 +114,35 @@ def run_reconcile(vault_root: str = r'C:\Vault',
         chi_dir = vault_dir / 'Chi'
 
         if claude_dir.is_dir():
-            for md in sorted(claude_dir.glob('*.md')):
+            claude_mds = sorted(claude_dir.glob('*.md'))
+            pa_mds = [md for md in claude_mds
+                      if 'zh-CN' not in md.stem and not md.stem.endswith('_figures')]
+            with ThreadPoolExecutor() as ex:  # IO并行解析H1，判定保持原顺序串行
+                pa_targets = dict(zip(pa_mds, ex.map(_resolve_pa_target, pa_mds)))
+            for md in claude_mds:
                 stem = md.stem
                 if 'zh-CN' in stem:
                     continue
                 if stem.endswith('_figures'):
                     fe_info[f'{vname}/{stem[:-8]}'] = (md, vname, stem[:-8])
-                else:
-                    force_keep = bool(_CITATION_RE.search(stem))
-                    dupe_m = _DUPE_SUFFIX_RE.search(stem)  # not used in decision; detected for visibility
-                    is_dupe = bool(dupe_m) and (md.parent / f'{stem[:dupe_m.start()]}.md').exists()
-                    target = _resolve_pa_target(md)
-                    action = resolve_action(target, vname, stem, clip_to_vault, pa_referenced, force_keep)
-                    pa_info[f'{vname}/{stem}'] = (md, vname, action)
-                    extra = ' [citation]' if force_keep else (' [duplicate]' if is_dupe else '')
-                    print(f'[PA] {action:20s} {_rel(vault_root, md)}{extra}')
-                    if target:
-                        print(f'     target={target}')
+                    continue
+                force_keep = bool(_CITATION_RE.search(stem))
+                dupe_m = _DUPE_SUFFIX_RE.search(stem)  # not used in decision; detected for visibility
+                is_dupe = bool(dupe_m) and (md.parent / f'{stem[:dupe_m.start()]}.md').exists()
+                target = pa_targets[md]
+                action = resolve_action(target, vname, stem, clip_to_vault, pa_referenced, force_keep)
+                pa_info[f'{vname}/{stem}'] = (md, vname, action)
+                extra = ' [citation]' if force_keep else (' [duplicate]' if is_dupe else '')
+                print(f'[PA] {action:20s} {_rel(vault_root, md)}{extra}')
+                if target:
+                    print(f'     target={target}')
 
         if chi_dir.is_dir():
-            for md in sorted(chi_dir.glob('*.md')):
+            chi_mds = sorted(chi_dir.glob('*.md'))
+            with ThreadPoolExecutor() as ex:  # IO并行解析frontmatter
+                pt_targets = list(ex.map(_resolve_pt_target, chi_mds))
+            for md, target in zip(chi_mds, pt_targets):
                 stem = md.stem
-                target = _resolve_pt_target(md)
                 action = resolve_action(target, vname, stem, clip_to_vault, pt_referenced)
                 pt_info[str(md)] = (md, vname, action)
                 print(f'[PT] {action:20s} {_rel(vault_root, md)}')

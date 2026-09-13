@@ -1,8 +1,10 @@
 """/s: Replace Unicode symbols with ASCII equivalents across Obsidian Vault .md files."""
 
 import re
+from concurrent.futures import ThreadPoolExecutor
+from itertools import repeat
 from pathlib import Path
-from typing import Dict, Iterator, List, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from core import iter_vault_dirs
 from core.refs import canonicalize_stem
@@ -51,6 +53,22 @@ def _fix_wikilinks(content: str, stem_map: Dict[str, str]) -> Tuple[str, int]:
     return _WIKILINK_RE.sub(_replace, content), count
 
 
+def _fix_one(md: Path, link_map: Dict[str, str]) -> Optional[Tuple[Path, int]]:
+    try:
+        content = md.read_text(encoding='utf-8')
+    except Exception:
+        return None
+    new_content, link_count = _fix_wikilinks(content, link_map)
+    if not link_count:
+        return None
+    try:
+        md.write_text(new_content, encoding='utf-8')
+    except Exception as e:
+        print(f'  写入失败 {md}: {e}')
+        return None
+    return md, link_count
+
+
 def run_unify_symbols(vault_root: str = r'C:\Vault', dry_run: bool = True) -> bool:
     vault_root = Path(vault_root)
     md_files, changed, changed_paths = _scan_vault(vault_root)
@@ -71,19 +89,12 @@ def run_unify_symbols(vault_root: str = r'C:\Vault', dry_run: bool = True) -> bo
 
     link_map = {**{v: v for v in changed.values()}, **changed}
     total_links = 0
-    for md in md_files:
-        try:
-            content = md.read_text(encoding='utf-8')
-        except Exception:
-            continue
-        new_content, link_count = _fix_wikilinks(content, link_map)
-        if link_count:
-            total_links += link_count
-            try:
-                md.write_text(new_content, encoding='utf-8')
-            except Exception as e:
-                print(f'  写入失败 {md}: {e}')
+    with ThreadPoolExecutor() as ex:  # 并行读写，ex.map 保证输出顺序与串行一致
+        for result in ex.map(_fix_one, md_files, repeat(link_map)):
+            if result is None:
                 continue
+            md, link_count = result
+            total_links += link_count
             print(f'  [{link_count} links] {md.relative_to(vault_root)}')
 
     renames = 0

@@ -1,4 +1,4 @@
-"""/s: core package for Obsidian Vault tools: crossref_api, doi, frontmatter, markdown_utils, obsidian_path, pdf_extractor, refs. Crossref API, PubMed E-utilities, DOI, MinerU."""
+"""/s: core package for Obsidian Vault tools: crossref_api, doi, frontmatter, http, markdown_utils, obsidian_path, pdf_extractor, refs. Crossref API, PubMed E-utilities, DOI, MinerU."""
 
 import os
 import shutil

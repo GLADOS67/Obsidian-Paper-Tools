@@ -45,10 +45,7 @@ def parse_frontmatter_file(path: Path) -> Tuple[Optional[Dict], str]:
     return fm or None, rest
 
 
-def read_fm(path: Path) -> Tuple[Dict, str]:
-    """Read .md with encoding fallback, returning (fm_dict, body)."""
-    fm, body = parse_frontmatter_file(path)
-    return (fm if fm else {}), body
+
 
 
 def dump_frontmatter(fm: Dict, body: str) -> str:
@@ -80,7 +77,7 @@ def apply_cited_by(fm: Dict, citing_dois: list) -> None:
 
 def _collect_file_dois(md_file: Path, include_refs: bool) -> List[str]:
     try:
-        fm, _ = read_fm(md_file)
+        fm = parse_frontmatter_file(md_file)[0] or {}
     except Exception:
         return []
     dois = []
