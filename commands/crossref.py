@@ -85,7 +85,8 @@ def _resolve_doi_by_title(title: str, md_title: str, cache: dict) -> Optional[st
         print(f'标题→DOI: {doi}')
         return doi
     sm = SequenceMatcher(None, md_title.lower(), crossref_title.lower())
-    sim = sm.ratio() if sm.quick_ratio() >= SM_QUICK else sm.quick_ratio()
+    quick = sm.quick_ratio()
+    sim = sm.ratio() if quick >= SM_QUICK else quick
     print(f'标题比对: [{crossref_title[:80]}] vs [{md_title[:80]}] → 相似度 {sim:.2f}')
     if sim >= 0.5:
         print(f'标题→DOI: {doi}')

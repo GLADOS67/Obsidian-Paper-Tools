@@ -17,13 +17,13 @@ import requests
 from core.crossref_api import (fetch_references, get_doi_from_citation,
                                get_cited_by_pubmed, get_issued_year,
                                load_cache, save_cache)
-from core.doi import (PATTERN_DOI, find_plausible_dois, get_main_doi, make_wikilink,
+from core.doi import (PATTERN_DOI, find_plausible_dois, get_main_doi,
                        normalize_unicode_dashes, process_doi, repair_doi_text)
-from core.frontmatter import (build_doi_set, cited_by_fresh, dump_frontmatter,
-                               parse_frontmatter_str)
+from core.frontmatter import (apply_cited_by, build_doi_set, cited_by_fresh,
+                               dump_frontmatter, parse_frontmatter_str)
 from core.markdown_utils import clean_markdown_body
 from core.refs import build_existing_dois, canonicalize_stem, new_doi_wikilinks, process_existing_references
-from core import try_copy, is_vault_dir
+from core import try_copy, iter_vault_dirs
 from core.pdf_extractor import convert_pdf_to_md, extract_dois_from_pdf
 from config import (DEFAULT_IMAGE_PATH, DEFAULT_MD_PATH, DEFAULT_PDF_PATH,
                     DEFAULT_ZIP_PATH, MINERU_TOKEN, OBSIDIAN_ROOT)
@@ -37,9 +37,7 @@ URL_PATTERN = re.compile(
 
 def _build_clippings_index(vault_root: Path) -> dict:
     index = {}
-    for vault_dir in sorted(vault_root.iterdir()):
-        if not is_vault_dir(vault_dir):
-            continue
+    for vault_dir in iter_vault_dirs(vault_root):
         clips = vault_dir / 'Clippings'
         if not clips.is_dir():
             continue
@@ -144,11 +142,8 @@ def _replace_urls(content, urls):
 def _update_cited_by(fm, main_doi, crossref_cache, cited_by_max, clippings_doi_set):
     if cited_by_fresh(fm):
         return
-    count, citing_dois = get_cited_by_pubmed(main_doi, crossref_cache, clippings_doi_set, cited_by_max)
-    fm.pop('cited_by_count', None)
-    fm['cited_by_date'] = datetime.now().strftime('%Y-%m-%d')
-    if citing_dois:
-        fm['cited_by'] = [make_wikilink(process_doi(d)[0]) for d in citing_dois]
+    _, citing_dois = get_cited_by_pubmed(main_doi, crossref_cache, clippings_doi_set, cited_by_max)
+    apply_cited_by(fm, citing_dois)
 
 
 def _merge_new_dois(fm, all_dois, md_name):
@@ -251,6 +246,7 @@ def _poll_batch_completion(batch_id, token, max_wait=1800, expected_count=None):
     url = f'https://mineru.net/api/v4/extract-results/batch/{batch_id}'
     headers = {'Authorization': f'Bearer {token}'}
     start = time.time()
+    files = []
     while time.time() - start < max_wait:
         try:
             resp = requests.get(url, headers=headers, timeout=30)

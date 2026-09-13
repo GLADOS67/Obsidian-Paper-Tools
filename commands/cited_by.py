@@ -2,14 +2,14 @@
 
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from core.crossref_api import get_cited_by_pubmed, load_cache, save_cache
-from core.doi import PATTERN_DOI, get_main_doi, make_wikilink, process_doi
+from core.doi import PATTERN_DOI, get_main_doi, process_doi
 from core.frontmatter import (
-    build_doi_set, cited_by_fresh, dump_frontmatter, parse_frontmatter_str,
+    apply_cited_by, build_doi_set, cited_by_fresh, dump_frontmatter,
+    parse_frontmatter_str,
 )
 from core.obsidian_path import resolve_input_path
 from core.refs import wikilink_doi
@@ -46,10 +46,8 @@ def _process_cited_file(md_file: Path, cache: dict, existing: set,
 
     with lock:
         count, citing_dois = get_cited_by_pubmed(main_doi, cache, existing, max_rows)
-    fm.pop('cited_by_count', None)
-    fm['cited_by_date'] = datetime.now().strftime('%Y-%m-%d')
+    apply_cited_by(fm, citing_dois)
     if citing_dois:
-        fm['cited_by'] = [make_wikilink(process_doi(d)[0]) for d in citing_dois]
         with lock:
             existing.update(d.lower() for d in citing_dois)
         print(f'[OK] {md_file.name}: cited_by_date={fm["cited_by_date"]}  新增 {len(citing_dois)} 篇')

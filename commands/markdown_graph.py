@@ -93,37 +93,15 @@ def _resolve_self_doi(file_stem: str, refs: List[str]) -> Optional[str]:
     if not refs:
         return None
     for ref in refs:
-        if ref.startswith('[[') and ref.endswith(']]') and '|' in ref:
-            name_part, doi_part = ref[2:-2].split('|', 1)
-            if name_part.strip() == file_stem:
-                m = PATTERN_DOI.search(doi_part)
-                if m:
-                    return process_doi(m.group(0))[0]
+        if (p := split_wikilink(ref)) and p[0].strip() == file_stem:
+            m = PATTERN_DOI.search(p[1])
+            if m:
+                return process_doi(m.group(0))[0]
     first = refs[0]
     inner = first[2:-2] if (first.startswith('[[') and first.endswith(']]')) else first
     doi_part = inner.partition('|')[2] or inner
     m = PATTERN_DOI.search(doi_part)
     return process_doi(m.group(0))[0] if m else None
-
-
-def _process_unhandled_file(file: Path, content: str, fm: Dict, rest: str,
-                            unique_map: Dict[str, DoiEntry]) -> Tuple[Dict, str]:
-    if not isinstance(fm, dict):
-        print(f'    ⚠️  {file.name} 的 frontmatter 非字典类型，已重置为空字典')
-        fm = {}
-    rest = clean_markdown_body(rest)
-    removed = [k for k in ('author', 'published') if fm.pop(k, None) is not None]
-    if removed:
-        print(f'    🗑️  删除 {file.name} 字段：{",".join(removed)}')
-    unique_dois = {doi.lower(): doi for doi in find_plausible_dois(repair_doi_text(content))}
-    doi_refs = [process_doi(doi) for doi in unique_dois.values()]
-    refs, special_count = _rebuild_reference_list(doi_refs, unique_map, file.stem, is_existing=False)
-    if refs:
-        fm['reference'] = refs
-        print(f'    ✅ 添加 {len(refs)} 个DOI')
-    fm['aliases'] = []
-    fm['特殊引用数'] = special_count
-    return fm, rest
 
 
 def _process_one_file(file: Path, unique_map: Dict[str, DoiEntry],
@@ -134,20 +112,35 @@ def _process_one_file(file: Path, unique_map: Dict[str, DoiEntry],
         print(f'  警告：读取文件 {file.name} 失败，跳过 → {str(e)}')
         return None
     fm, rest = parse_frontmatter_str(content)
+    if not isinstance(fm, dict):
+        print(f'    ⚠️  {file.name} 的 frontmatter 非字典类型，已重置为空字典')
+        fm = {}
+    # 纯计算部分（cited_by 解析、全文DOI提取、body清洗）在锁外完成，锁仅保护共享map写入
+    cb_parsed = [p for item in fm.get('cited_by', []) if (p := _parse_cited_by_entry(item))]
+    unhandled = 'aliases' not in fm and 'reference' not in fm
+    doi_refs = None
+    if unhandled:
+        rest = clean_markdown_body(rest)
+        unique_dois = {doi.lower(): doi for doi in find_plausible_dois(repair_doi_text(content))}
+        doi_refs = [process_doi(doi) for doi in unique_dois.values()]
     with lock:
-        for cb_item in fm.get('cited_by', []):
-            parsed = _parse_cited_by_entry(cb_item)
-            if parsed is None:
-                continue
-            name, disp = parsed
+        for name, disp in cb_parsed:
             dl = disp.lower()
             cited_by_map.setdefault(dl, (disp, []))
             if file.stem not in cited_by_map[dl][1]:
                 cited_by_map[dl][1].append(file.stem)
             _update_doi_map(disp, name, unique_map, file.stem, slot=1)
-        if 'aliases' not in fm and 'reference' not in fm:
+        if unhandled:
             print(f'处理未处理文件：{file.name}')
-            fm, rest = _process_unhandled_file(file, content, fm, rest, unique_map)
+            removed = [k for k in ('author', 'published') if fm.pop(k, None) is not None]
+            if removed:
+                print(f'    🗑️  删除 {file.name} 字段：{",".join(removed)}')
+            refs, special_count = _rebuild_reference_list(doi_refs, unique_map, file.stem, is_existing=False)
+            if refs:
+                fm['reference'] = refs
+                print(f'    ✅ 添加 {len(refs)} 个DOI')
+            fm['aliases'] = []
+            fm['特殊引用数'] = special_count
             print(f'  ✅ {file.name} 处理完成')
         else:
             processed_refs, special_count = _rebuild_reference_list(

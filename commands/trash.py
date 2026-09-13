@@ -27,11 +27,6 @@ def _trash_unreferenced(images_dir: Path, referenced: set, trash_dir: Path) -> N
     print(f'冗余图片移入 {trash_dir}: {moved}/{len(unreferenced)}')
 
 
-def _extract_entry(zf: zipfile.ZipFile, entry: str, dest: Path) -> None:
-    with zf.open(entry) as src, open(dest, 'wb') as dst:
-        shutil.copyfileobj(src, dst)
-
-
 def _restore_missing(images_dir: Path, referenced: set, zip_dir: Path) -> None:
     actual = {f.name for f in images_dir.iterdir() if f.is_file()}
     missing = referenced - actual
@@ -47,7 +42,8 @@ def _restore_missing(images_dir: Path, referenced: set, zip_dir: Path) -> None:
                 hits = [e for e in zf.namelist() if os.path.basename(e) in missing]
                 for entry in hits:
                     name = os.path.basename(entry)
-                    _extract_entry(zf, entry, images_dir / name)
+                    with zf.open(entry) as src, open(images_dir / name, 'wb') as dst:
+                        shutil.copyfileobj(src, dst)
                     missing.discard(name)
                     restored += 1
         except Exception:

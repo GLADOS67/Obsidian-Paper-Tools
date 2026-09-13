@@ -110,36 +110,24 @@ def main():
                    args.enable_api_references, args.enable_cited_by, args.cited_by_max,
                    local=(cmd == 'pdf2md-local'), path_images=args.path_images,
                    ref_max_age=args.ref_max_age)
-    elif cmd == 'markdown':
-        run_markdown_graph(args.path)
-    elif cmd == 'crossref':
-        if args.input:
-            crossref_handle(args.input)
-        else:
-            run_crossref_interactive()
-    elif cmd == 'match':
-        run_match(args.base_dir, args.dry_run, args.threshold, args.force, args.verbose)
-    elif cmd == 'trash':
-        run_trash(args.path)
-    elif cmd == 'remove-doi':
-        _cmd_remove_doi(args)
-    elif cmd == 'cited-by':
-        if args.path == '-':
-            run_cited_by_interactive()
-        else:
-            run_cited_by(args.path, args.max)
-    elif cmd == 'archive':
-        run_archive(args.source, args.target)
-    elif cmd == 'rename-pdf':
-        run_rename_pdf(args.directory)
-    elif cmd == 'clean-images':
-        run_clean_images()
-    elif cmd == 'reconcile':
-        run_reconcile(dry_run=not args.force)
-    elif cmd == 'unify-symbols':
-        run_unify_symbols(args.vault, dry_run=not args.force)
-    elif cmd == 'pmce':
-        run_pmce(args.input, args.path, no_graph=args.no_graph, dry_run=args.dry_run)
+        return
+
+    handlers = {
+        'markdown': lambda: run_markdown_graph(args.path),
+        'crossref': lambda: crossref_handle(args.input) if args.input else run_crossref_interactive(),
+        'match': lambda: run_match(args.base_dir, args.dry_run, args.threshold, args.force, args.verbose),
+        'trash': lambda: run_trash(args.path),
+        'remove-doi': lambda: _cmd_remove_doi(args),
+        'cited-by': lambda: run_cited_by_interactive() if args.path == '-' else run_cited_by(args.path, args.max),
+        'archive': lambda: run_archive(args.source, args.target),
+        'rename-pdf': lambda: run_rename_pdf(args.directory),
+        'clean-images': run_clean_images,
+        'reconcile': lambda: run_reconcile(dry_run=not args.force),
+        'unify-symbols': lambda: run_unify_symbols(args.vault, dry_run=not args.force),
+        'pmce': lambda: run_pmce(args.input, args.path, no_graph=args.no_graph, dry_run=args.dry_run),
+    }
+    if handler := handlers.get(cmd):
+        handler()
 
 
 if __name__ == '__main__':

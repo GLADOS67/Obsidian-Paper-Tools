@@ -9,6 +9,7 @@ from typing import Optional, Tuple
 from config import OBSIDIAN_ROOT
 
 SM_QUICK = 0.7
+_GLOB_ESCAPE_RE = re.compile(r'([\[\]*?])')
 
 
 def _parse_obsidian_uri(uri: str) -> Optional[Tuple[str, str]]:
@@ -19,11 +20,6 @@ def _parse_obsidian_uri(uri: str) -> Optional[Tuple[str, str]]:
         return (vault, file) if vault and file else None
     except Exception:
         return None
-
-
-def _try_suffix(full_path: Path, suffix: str) -> Optional[Path]:
-    candidate = full_path.with_suffix(suffix)
-    return candidate if candidate.exists() else None
 
 
 def _try_strip_dot(full_path: Path) -> Optional[Path]:
@@ -38,7 +34,7 @@ def _fuzzy_search(dir_path: Path, stem_raw: str) -> Optional[Path]:
     if not dir_path.exists() or not stem_raw:
         return None
     stem_lower = stem_raw.lower()
-    safe_stem = re.sub(r'([\[\]*?])', r'[\1]', stem_raw)
+    safe_stem = _GLOB_ESCAPE_RE.sub(r'[\1]', stem_raw)
     best, best_mtime = None, 0.0
     try:
         for p in dir_path.glob(f'{safe_stem}*.md'):
@@ -78,7 +74,9 @@ def resolve_input_path(input_str: str, fallback_search: bool = False) -> Optiona
     full_path = OBSIDIAN_ROOT / vault / file_clean
     if full_path.exists():
         return full_path
-    for candidate in (_try_suffix(full_path, '.md'), _try_strip_dot(full_path)):
+    md_candidate = full_path.with_suffix('.md')
+    for candidate in (md_candidate if md_candidate.exists() else None,
+                      _try_strip_dot(full_path)):
         if candidate:
             return candidate
     fuzzy = _fuzzy_search(full_path.parent, full_path.stem.strip('. \t').rstrip('.'))

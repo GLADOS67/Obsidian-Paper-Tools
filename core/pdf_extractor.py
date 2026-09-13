@@ -1,6 +1,7 @@
 """/s: pdfplumber + PyMuPDF PDF metadata and first-page title extraction."""
 
 import multiprocessing
+import queue
 import re
 from pathlib import Path
 
@@ -53,7 +54,10 @@ def extract_dois_from_pdf(pdf_path, timeout=60):
             p.join()
             print(f'PDF文本提取超时({timeout}s)，跳过 {pdf_path.name}')
             return set()
-        pages = result_queue.get() if not result_queue.empty() else []
+        try:
+            pages = result_queue.get_nowait()
+        except queue.Empty:
+            pages = []
         p.close()
         if not pages:
             return set()

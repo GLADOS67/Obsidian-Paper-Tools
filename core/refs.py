@@ -31,10 +31,7 @@ def extract_wikilink_name(value) -> Optional[str]:
 
 
 def first_ref_target(ref_list: list) -> Optional[str]:
-    if not ref_list:
-        return None
-    m = WIKILINK_RE.search(str(ref_list[0]).replace('\n', ' '))
-    return m.group(1).strip() if m else None
+    return extract_wikilink_name(ref_list[0]) if ref_list else None
 
 
 def extract_doi_set(ref_list: list) -> set:

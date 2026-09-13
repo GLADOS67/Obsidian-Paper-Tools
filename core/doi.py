@@ -116,8 +116,9 @@ def get_main_doi(fm: dict, content: str, all_dois: set = None) -> Optional[str]:
     if doi := doi_from_doi_line(content):
         return doi
     # 正文中第一个出现的DOI = 论文自身DOI（出现在标题/URL区，早于参考文献）
-    if dois := find_plausible_dois(content):
-        return process_doi(dois[0])[0]
+    for m in PATTERN_DOI.finditer(content):
+        if is_plausible_doi(d := m.group(0)):
+            return process_doi(d)[0]
     if all_dois:
         return process_doi(next(iter(all_dois)))[0]
     return None

@@ -13,11 +13,13 @@ import requests
 from core.doi import (PATTERN_DOI, PATTERN_FS_INVALID, find_plausible_dois,
                       normalize_unicode_dashes, process_doi)
 from commands.markdown_graph import run_markdown_graph
+from config import USER_AGENT
 
-USER_AGENT = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-              '(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0')
 EUPMC_BASE = 'https://www.ebi.ac.uk/europepmc/webservices/rest'
 XLINK = '{http://www.w3.org/1999/xlink}href'
+
+_http = requests.Session()
+_http.headers.update({'User-Agent': USER_AGENT})
 
 PATTERN_PMID_LABELED = re.compile(r'PMID:?\s*(\d{6,9})', re.IGNORECASE)
 PATTERN_PMC_ID = re.compile(r'PMC\d+', re.IGNORECASE)
@@ -93,8 +95,7 @@ def _extract_identifiers(text):
 def _eupmc_get(url, params=None, retries=3):
     for attempt in range(retries):
         try:
-            r = requests.get(url, params=params, timeout=60,
-                             headers={'User-Agent': USER_AGENT})
+            r = _http.get(url, params=params, timeout=60)
             if r.status_code == 200:
                 return r
             if r.status_code not in (429, 500, 502, 503, 504):
@@ -150,6 +151,31 @@ def _match_one(results, kind, val):
 def _fetch_fulltext_xml(pmcid):
     resp = _eupmc_get(f'{EUPMC_BASE}/{pmcid}/fullTextXML')
     return resp.text if resp is not None else None
+
+
+FIG_URL_CACHE = {}
+
+
+def _get_figure_urls(pmcid):
+    if pmcid in FIG_URL_CACHE:
+        return FIG_URL_CACHE[pmcid]
+    try:
+        r = requests.get(
+            f'https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?format=json',
+            timeout=30, headers={'User-Agent': USER_AGENT})
+        if r.status_code != 200:
+            return {}
+    except Exception:
+        return {}
+    mapping = {}
+    pmcid_num = pmcid.replace('PMC', '', 1)
+    for m in re.finditer(r'blobs/[A-Za-z0-9]+/' + re.escape(pmcid_num)
+                         + r'/[A-Za-z0-9]+/([A-Za-z0-9_.\-]+)', r.text):
+        fname = m.group(1)
+        if fname not in mapping:
+            mapping[fname] = f'https://cdn.ncbi.nlm.nih.gov/pmc/{m.group(0)}'
+    FIG_URL_CACHE[pmcid] = mapping
+    return mapping
 
 
 # ── JATS XML → MD ─────────────────────────────────────────
@@ -217,6 +243,18 @@ def _sec_md(sec, level, pmcid, lines):
     _blocks_md(sec, level + 1, pmcid, lines)
 
 
+def _table_cell(c):
+    tag = _local(c.tag)
+    if tag not in ('td', 'th'):
+        return ''
+    attrs = ''
+    for k in ('colspan', 'rowspan'):
+        v = c.get(k)
+        if v and v != '1':
+            attrs += f' {k}="{v}"'
+    return f'<{tag}{attrs}>{_inline(c)}</{tag}>'
+
+
 def _table_md(tw):
     lines = []
     label = _first(tw, 'label')
@@ -227,16 +265,14 @@ def _table_md(tw):
     table = _first(tw, 'table')
     if table is None:
         return lines
-    rows = [[' '.join(_inline(c).split()) for c in tr if _local(c.tag) in ('td', 'th')]
-            for tr in table.iter() if _local(tr.tag) == 'tr']
-    rows = [r for r in rows if any(r)]
-    if not rows:
-        return lines
-    width = max(len(r) for r in rows)
-    rows = [r + [''] * (width - len(r)) for r in rows]
-    lines.append('| ' + ' | '.join(rows[0]) + ' |')
-    lines.append('|' + ' --- |' * width)
-    lines += ['| ' + ' | '.join(r) + ' |' for r in rows[1:]]
+    html_lines = ['<table>']
+    for tr in table.iter():
+        if _local(tr.tag) != 'tr':
+            continue
+        cells = [_table_cell(c) for c in tr if _local(c.tag) in ('td', 'th')]
+        html_lines.append(f'<tr>{"".join(cells)}</tr>')
+    html_lines.append('</table>')
+    lines.append('\n'.join(html_lines))
     return lines
 
 
@@ -247,10 +283,15 @@ def _fig_md(fig, pmcid):
     caption = _first(fig, 'caption')
     alt = _para(label) if label is not None else 'Figure'
     lines = []
+    img_url = None
     if href:
-        lines.append(f'![{alt}](https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/bin/{href}.jpg)')
-    if caption is not None:
-        lines.append(f'**{alt}** {_para(caption)}')
+        figure_urls = _get_figure_urls(pmcid)
+        img_url = figure_urls.get(href)
+    if img_url:
+        lines.append(f'![{alt}]({img_url})')
+    lines.append(f'**{alt}** {_para(caption) if caption is not None else ""}'.rstrip())
+    if caption is None:
+        lines.append('')
     return lines
 
 

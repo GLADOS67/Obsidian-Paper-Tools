@@ -11,23 +11,20 @@ from config import DEFAULT_IMAGE_PATH, OBSIDIAN_ROOT
 PATTERN_IMG = re.compile(r'!\[[^\]]*\]\(([^)]+)\)')
 
 
-def _extract_local_names(text: str) -> set:
+def _scan_one(md_path: Path) -> set:
+    try:
+        text = md_path.read_text(encoding='utf-8')
+    except Exception:
+        return set()
     names = set()
     for m in PATTERN_IMG.finditer(text):
         url = m.group(1)
-        normalized = url.replace('\\', '/')
         if url.startswith(('http://', 'https://')):
             continue
+        normalized = url.replace('\\', '/')
         if 'Vault/IMAGE' in normalized or '/images/' in normalized or normalized.startswith('images/'):
             names.add(os.path.basename(normalized))
     return names
-
-
-def _scan_one(md_path: Path) -> set:
-    try:
-        return _extract_local_names(md_path.read_text(encoding='utf-8'))
-    except Exception:
-        return set()
 
 
 def scan_referenced_images(md_files, show_progress: bool = False) -> set:

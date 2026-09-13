@@ -14,12 +14,15 @@ import requests
 
 from core.doi import process_doi
 
-from config import CROSSREF_CACHE, CROSSREF_MAILTO
+from config import CROSSREF_CACHE, CROSSREF_MAILTO, USER_AGENT
 CROSSREF_API_BASE = 'https://api.crossref.org/works'
-USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0'
 
 _http = requests.Session()
 _http.headers.update({'User-Agent': USER_AGENT})
+
+
+def _polite_sleep(lo: float = 1.0, hi: float = 2.0) -> None:
+    time.sleep(random.uniform(lo, hi))
 
 
 def load_cache() -> Dict:
@@ -67,7 +70,7 @@ def get_doi_from_citation(citation_text: str, cache: dict = None,
     data = _api_get(CROSSREF_API_BASE, params={
         'rows': 1, 'mailto': CROSSREF_MAILTO, 'query': citation_text,
     })
-    time.sleep(random.uniform(1.0, 2.0))
+    _polite_sleep()
     if data is None:
         print(f'Crossref API请求失败: {citation_text[:80]}')
         return None
@@ -103,6 +106,12 @@ def get_issued_year(doi: str, cache: dict = None) -> Optional[int]:
     return year
 
 
+def _ref_entry(ref: dict, doi: str) -> Dict:
+    return {'text': ref.get('unstructured', ''),
+            'doi': process_doi(doi)[0],
+            'title': ref.get('article-title') or ref.get('volume-title', '')}
+
+
 def fetch_references(doi: str, cache: dict = None) -> List[Dict]:
     cache = cache or {}
     refs_key, citedby_key = doi, f'citedby:{doi}'
@@ -121,11 +130,8 @@ def fetch_references(doi: str, cache: dict = None) -> List[Dict]:
     refs_with_doi = []
     refs_missing = []
     for ref in msg.get('reference', []):
-        ref_doi = ref.get('DOI')
-        if ref_doi:
-            refs_with_doi.append({'text': ref.get('unstructured', ''),
-                                  'doi': process_doi(ref_doi)[0],
-                                  'title': ref.get('article-title') or ref.get('volume-title', '')})
+        if ref_doi := ref.get('DOI'):
+            refs_with_doi.append(_ref_entry(ref, ref_doi))
         elif ref.get('unstructured'):
             refs_missing.append(ref)
 
@@ -137,15 +143,9 @@ def fetch_references(doi: str, cache: dict = None) -> List[Dict]:
                        for r in refs_missing}
             for fut in as_completed(futures):
                 ref = futures[fut]
-                result = fut.result()
-                if result:
-                    ref_doi = result[0]
-                    print(f'补全成功: {ref_doi}')
-                    refs_with_doi.append({
-                        'text': ref.get('unstructured', ''),
-                        'doi': process_doi(ref_doi)[0],
-                        'title': ref.get('article-title') or ref.get('volume-title', ''),
-                    })
+                if result := fut.result():
+                    print(f'补全成功: {result[0]}')
+                    refs_with_doi.append(_ref_entry(ref, result[0]))
 
     print(f'拉取到 {len(refs_with_doi)} 条参考文献')
     cache[refs_key] = refs_with_doi
@@ -158,13 +158,15 @@ def get_cited_by_pubmed(doi: str, cache: dict = None,
     existing_dois = existing_dois or set()
     count_key, list_key = f'pm_citedby:{doi}', f'pm_citedby_list:{doi}'
 
+    def _fresh(all_dois: List[str]) -> List[str]:
+        return [d for d in all_dois if d.lower() not in existing_dois][:max_rows]
+
     if count_key in cache and list_key in cache:
-        total, all_dois = cache[count_key], cache[list_key]
-        return total, [d for d in all_dois if d.lower() not in existing_dois][:max_rows]
+        return cache[count_key], _fresh(cache[list_key])
 
     def _finalize(total: int, all_dois: List[str]) -> Tuple[int, List[str]]:
         cache[count_key], cache[list_key] = total, all_dois
-        return total, [d for d in all_dois if d.lower() not in existing_dois][:max_rows]
+        return total, _fresh(all_dois)
 
     base = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
     data = _api_get(f'{base}/esearch.fcgi',
@@ -174,7 +176,7 @@ def get_cited_by_pubmed(doi: str, cache: dict = None,
     pmids = data.get('esearchresult', {}).get('idlist', [])
     if not pmids:
         return _finalize(0, [])
-    time.sleep(random.uniform(1.0, 2.0))
+    _polite_sleep()
 
     data = _api_get(f'{base}/elink.fcgi',
                     params={'dbfrom': 'pubmed', 'id': pmids[0],
@@ -190,7 +192,7 @@ def get_cited_by_pubmed(doi: str, cache: dict = None,
     citing = []
     for i in range(0, len(links), 100):
         batch = links[i:i + 100]
-        time.sleep(random.uniform(1.0, 2.0))
+        _polite_sleep()
         results = _api_get(f'{base}/esummary.fcgi',
                            params={'db': 'pubmed', 'id': ','.join(batch), 'retmode': 'json'})
         if results is None:

@@ -14,6 +14,11 @@ def is_vault_dir(p: Path) -> bool:
     return any((p / d).is_dir() for d in _VAULT_DIRS)
 
 
+def iter_vault_dirs(vault_root: Path):
+    """按名称排序产出 vault_root 下的有效 vault 目录。"""
+    return (d for d in sorted(vault_root.iterdir()) if is_vault_dir(d))
+
+
 def try_copy(src: Path, dst: Path) -> bool:
     if not src.exists() or dst.exists():
         return False

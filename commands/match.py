@@ -70,6 +70,26 @@ def _pa_by_doi(pa_index: Dict[str, Path], pa_text: Dict[str, str],
     return None, None, ''
 
 
+def _find_pa(clip_stem: str, pa_index: Dict[str, Path],
+             pa_reverse: Dict[str, Tuple[Path, str]], pa_text: Dict[str, str],
+             pa_alias: Dict[str, str], doi: Optional[str]
+             ) -> Tuple[Optional[Path], Optional[str], str]:
+    """按 reverse → filename → doi → fuzzy 顺序定位 PA 笔记。"""
+    underscore_stem = clip_stem.replace(' ', '_')
+    rev = pa_reverse.get(clip_stem) or pa_reverse.get(underscore_stem)
+    if rev:
+        return rev[0], rev[1], 'reverse'
+    if pa_path := pa_index.get(underscore_stem):
+        return pa_path, pa_alias.get(pa_path.stem), 'filename'
+    if doi:
+        found = _pa_by_doi(pa_index, pa_text, pa_alias, doi)
+        if found[0]:
+            return found
+    if result := _fuzzy_best(underscore_stem, pa_index):
+        return result[0], pa_alias.get(result[0].stem), 'fuzzy'
+    return None, None, ''
+
+
 def _match_pa(clip_md: Path, fm: dict, pa_index: Dict[str, Path],
               pa_reverse: Dict[str, Tuple[Path, str]], pa_text: Dict[str, str],
               pa_alias: Dict[str, str], force: bool,
@@ -78,23 +98,8 @@ def _match_pa(clip_md: Path, fm: dict, pa_index: Dict[str, Path],
     if existing and not force:
         return 'skipped', None
 
-    clip_stem = clip_md.stem
-    underscore_stem = clip_stem.replace(' ', '_')
-
-    rev = pa_reverse.get(clip_stem) or pa_reverse.get(underscore_stem)
-    if rev:
-        pa_path, alias, method = rev[0], rev[1], 'reverse'
-    else:
-        pa_path = pa_index.get(underscore_stem)
-        if pa_path:
-            alias, method = pa_alias.get(pa_path.stem), 'filename'
-        else:
-            doi = _extract_clippings_doi(fm) if clippings_doi_cache is None else clippings_doi_cache
-            pa_path, alias, method = (_pa_by_doi(pa_index, pa_text, pa_alias, doi)
-                                      if doi else (None, None, ''))
-        if not pa_path and (result := _fuzzy_best(underscore_stem, pa_index)):
-            pa_path, method = result[0], 'fuzzy'
-            alias = pa_alias.get(pa_path.stem)
+    doi = _extract_clippings_doi(fm) if clippings_doi_cache is None else clippings_doi_cache
+    pa_path, alias, method = _find_pa(clip_md.stem, pa_index, pa_reverse, pa_text, pa_alias, doi)
 
     if not pa_path:
         return ('failed' if not existing else 'skipped'), None
@@ -105,23 +110,26 @@ def _match_pa(clip_md: Path, fm: dict, pa_index: Dict[str, Path],
     return 'matched', pa_path
 
 
+def _find_fe(underscore_stem: str, fe_index: Dict[str, Path],
+             fe_reverse: Dict[str, Tuple[Path, str]]
+             ) -> Tuple[Optional[Path], Optional[str], str]:
+    """按 reverse → filename → fuzzy 顺序定位 FE 笔记。"""
+    if rev := fe_reverse.get(underscore_stem):
+        return rev[0], rev[1], 'reverse'
+    if fe_path := fe_index.get(underscore_stem):
+        return fe_path, None, 'filename'
+    if result := _fuzzy_best(underscore_stem + '_figures', fe_index):
+        return result[0], None, 'fuzzy'
+    return None, None, ''
+
+
 def _match_fe(clip_md: Path, fm: dict, fe_index: Dict[str, Path],
               fe_reverse: Dict[str, Tuple[Path, str]], force: bool):
     existing = fm.get('figure-extractor')
     if existing and not force:
         return 'skipped', None
 
-    underscore_stem = clip_md.stem.replace(' ', '_')
-
-    rev = fe_reverse.get(underscore_stem)
-    if rev:
-        fe_path, alias, method = rev[0], rev[1], 'reverse'
-    elif fe_path := fe_index.get(underscore_stem):
-        alias, method = None, 'filename'
-    elif result := _fuzzy_best(underscore_stem + '_figures', fe_index):
-        fe_path, alias, method = result[0], None, 'fuzzy'
-    else:
-        fe_path = None
+    fe_path, alias, method = _find_fe(clip_md.stem.replace(' ', '_'), fe_index, fe_reverse)
 
     if not fe_path:
         return ('failed' if not existing else 'skipped'), None

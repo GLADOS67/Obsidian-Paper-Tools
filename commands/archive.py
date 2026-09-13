@@ -8,11 +8,12 @@ from core.frontmatter import parse_frontmatter_str
 from core import try_copy
 
 
-def _norm(s: str) -> str:
-    return re.sub(r'[-\u2013\u2014]', '-', s)
-
-
+_DASH_RE = re.compile(r'[-\u2013\u2014]')
 PATTERN_WIKILINK = re.compile(r'\[\[([^\]|]+)')
+
+
+def _norm(s: str) -> str:
+    return _DASH_RE.sub('-', s)
 
 
 def _resolve_note(src_dir: Path, page: str) -> Path:

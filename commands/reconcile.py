@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 sys.stdout.reconfigure(encoding='utf-8')
-from core import is_vault_dir
+from core import iter_vault_dirs
 from core.frontmatter import parse_frontmatter_file
 from core.refs import (
     parse_h1_wikilink, extract_wikilink_name,
@@ -39,9 +39,7 @@ def build_clippings_index(vault_root: Path) -> Tuple[Dict[str, str], Set[str], S
     pa_referenced: Set[str] = set()
     pt_referenced: Set[str] = set()
 
-    for vault_dir in sorted(vault_root.iterdir()):
-        if not is_vault_dir(vault_dir):
-            continue
+    for vault_dir in iter_vault_dirs(vault_root):
         clip_dir = vault_dir / 'Clippings'
         if not clip_dir.is_dir():
             continue
@@ -107,9 +105,7 @@ def run_reconcile(vault_root: str = r'C:\Vault',
     fe_info: Dict[str, Tuple[Path, str, str]] = {}
     pt_info: Dict[str, Tuple[Path, str, str]] = {}
 
-    for vault_dir in sorted(vault_root.iterdir()):
-        if not is_vault_dir(vault_dir):
-            continue
+    for vault_dir in iter_vault_dirs(vault_root):
         vname = vault_dir.name
         claude_dir = vault_dir / 'Claude'
         chi_dir = vault_dir / 'Chi'
@@ -123,20 +119,12 @@ def run_reconcile(vault_root: str = r'C:\Vault',
                     fe_info[f'{vname}/{stem[:-8]}'] = (md, vname, stem[:-8])
                 else:
                     force_keep = bool(_CITATION_RE.search(stem))
-                    is_dupe = False  # not used in decision; detected here for visibility
-                    dupe_m = _DUPE_SUFFIX_RE.search(stem)
-                    if dupe_m:
-                        base_stem = stem[:dupe_m.start()]
-                        if (md.parent / f'{base_stem}.md').exists():
-                            is_dupe = True
+                    dupe_m = _DUPE_SUFFIX_RE.search(stem)  # not used in decision; detected for visibility
+                    is_dupe = bool(dupe_m) and (md.parent / f'{stem[:dupe_m.start()]}.md').exists()
                     target = _resolve_pa_target(md)
                     action = resolve_action(target, vname, stem, clip_to_vault, pa_referenced, force_keep)
                     pa_info[f'{vname}/{stem}'] = (md, vname, action)
-                    extra = ''
-                    if force_keep:
-                        extra = ' [citation]'
-                    elif is_dupe:
-                        extra = ' [duplicate]'
+                    extra = ' [citation]' if force_keep else (' [duplicate]' if is_dupe else '')
                     print(f'[PA] {action:20s} {_rel(vault_root, md)}{extra}')
                     if target:
                         print(f'     target={target}')

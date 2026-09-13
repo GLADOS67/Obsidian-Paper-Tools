@@ -108,14 +108,11 @@ def _get_first_page_title(doc):
     page = doc[0]
     page_h = page.rect.height
     blocks = [b for b in page.get_text("dict").get("blocks", []) if b.get("type") == 0]
-    spans = []
-    for b in blocks:
-        for line in b.get("lines", []):
-            line_y, line_x = line["bbox"][1], line["bbox"][0]
-            for span in line.get("spans", []):
-                text = span.get("text", "").strip()
-                if text and len(text) > 1:
-                    spans.append({'size': span["size"], 'text': text, 'y': line_y, 'x': line_x})
+    spans = [
+        {'size': span["size"], 'text': text, 'y': line["bbox"][1], 'x': line["bbox"][0]}
+        for b in blocks for line in b.get("lines", []) for span in line.get("spans", [])
+        if (text := span.get("text", "").strip()) and len(text) > 1
+    ]
     if not spans:
         return None
     sizes = sorted({s['size'] for s in spans}, reverse=True)
@@ -231,11 +228,9 @@ def run_rename_pdf(directory):
             if status == 'renamed':
                 renamed += 1
                 print(f'  {src.name} -> {info}')
-            elif status == 'failed':
-                skipped += 1
-                print(f'  Rename failed: {src.name} -> {info}')
             else:
                 skipped += 1
-                print(f'  Skip: {src.name} | {info}')
+                tag, sep = ('Rename failed', ' -> ') if status == 'failed' else ('Skip', ' | ')
+                print(f'  {tag}: {src.name}{sep}{info}')
 
     print(f"Total: {total}  Renamed: {renamed}  Skipped: {skipped}")
