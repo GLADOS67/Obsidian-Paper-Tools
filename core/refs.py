@@ -12,7 +12,7 @@ def canonicalize_stem(stem: str) -> str:
 
 WIKILINK_RE = re.compile(r'\[\[([^|]+)\|([^]]+)\]\]')
 LINK_TARGET_RE = re.compile(r'\[\[\s*([^|\]]+)')
-H1_WIKILINK_RE = re.compile(r'^#\s*\[\[([^|]+)\|([^]]+)\]\]')
+H1_WIKILINK_RE = re.compile(r'^#\s*\[\[?([^|\]]+)\|([^\]]+?)\]\]?')
 
 
 def parse_h1_wikilink(text: str) -> Optional[Tuple[str, str]]:
@@ -55,6 +55,22 @@ def norm_stems(stem: str) -> set:
     if (stripped := _STEM_PREFIX_RE.sub('', stem)) != stem:
         variants.add(stripped)
         variants |= {sv for v in tuple(variants) if (sv := _STEM_PREFIX_RE.sub('', v)) != v}
+    for v in tuple(variants):
+        variants.add(v.lower())
+    for v in tuple(variants):
+        if ' - ' in v:
+            variants.add(v.replace(' - ', ' '))
+    for v in tuple(variants):
+        if ' - ' in v:
+            prefix = v.split(' - ')[0]
+            if prefix and prefix != v:
+                variants.add(prefix)
+                variants.add(prefix.lower())
+    for v in tuple(variants):
+        stripped = v.rstrip('.')
+        if stripped and stripped != v:
+            variants.add(stripped)
+            variants.add(stripped.lower())
     return variants
 
 

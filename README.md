@@ -4,7 +4,7 @@
 
 ---
 
-# Obsidian-Paper-Tools 3.4 — 织命者卡洛斯
+# Obsidian-Paper-Tools 3.5 — 织命者卡洛斯
 
 > Obsidian. Our Vault. 🔗 Links. 🧠 Graph. 📂 Open formats.
 > Our way of research.
@@ -490,7 +490,7 @@ MIT
 
 **作者：** Li Kan <lik1453529@163.com>
 
-# Obsidian-Paper-Tools 3.4 — 织命者卡洛斯
+# Obsidian-Paper-Tools 3.5 — 织命者卡洛斯
 
 > Obsidian。Our Vault。🔗 双向链接。🧠 关系图谱。📂 开放格式。
 > 我们的科研之道。
@@ -939,46 +939,23 @@ MIT
 
 ---
 
-## 增量对比 (vs v3.3)
+## 增量对比 (vs v3.4)
 
-对比范围：`*.py` / `*.toml` / `*.md`（排除 `__pycache__` 字节码产物）。v3.3 全部源文件在 v3.4 中均保留，**无移除文件**；v3.4 新增 1 个文件（`core/http.py`）；其余 21 个源文件内容发生改动。
+对比范围：`*.py` / `*.toml` / `*.md`（排除 `__pycache__` 字节码产物）。v3.4 与 v3.5 源文件集合完全一致，**无新增文件、无移除文件**；内容发生改动的共 4 个源文件：`commands/match.py`、`core/refs.py`、`cli.py`、`README.md`（其余 23 个文件逐行相同）。
 
-| 维度 | v3.3 | v3.4 |
+| 维度 | v3.4 | v3.5 |
 | --- | --- | --- |
-| **新增文件** | — | `core/http.py`（共享 Crossref/PubMed HTTP 会话） |
+| **新增文件** | — | 无 |
 | **移除文件** | 无 | — |
-| **cli.py** | `markdown` 命令仅 `--path`；`match --threshold` 硬编码 0.85 | 新增 `--depth`（分文件夹统计深度，默认 0）；阈值改用 `JACCARD_THRESHOLD` 常量；`run_markdown_graph(args.path, args.depth)` |
-| **pyproject.toml** | description 提及 "pmce (PubMed MeSH Concept Explorer)" | description 改为 "shared HTTP session (retry/rate-limit)" |
-| **core/__init__.py** | docstring 不含 http | docstring 加入 http 模块 |
-| **core/doi.py** | `is_plausible_doi` 无缓存 | 加 `@lru_cache(maxsize=16384)` |
-| **core/frontmatter.py** | 提供 `read_fm()` 辅助 | 删除 `read_fm()`，`_collect_file_dois` 内联 `parse_frontmatter_file(...)[0] or {}` |
-| **core/obsidian_path.py** | 候选元组 for 循环 | 简化为单一 `candidate` 变量判断 |
-| **core/pdf_extractor.py** | 含 `extract_text()` | 删除未使用的 `extract_text()` |
-| **core/crossref_api.py** | 本地 `requests.Session` + 直接 `import requests`；strptime 解析出版日期 | 改用 `make_session()`；新增 `_parse_pubdate()` 正则解析（非法输入返回 None，等价且更快） |
-| **core/http.py** | 不存在 | 新增：`make_session()` 返回带统一 User-Agent 的共享 `requests.Session` |
-| **commands/archive.py** | 重复 `dst_dir/src.name` 计算、局部 `src_vault_sub/'Claude'` | 复用 `dst_md`/`src_claude`/`figs_dst` 变量 |
-| **commands/clean_images.py** | `actual_files` 集合推导内联 | 提取 `image_names()` 辅助函数，供 run_clean_images 与 trash 复用 |
-| **commands/crossref.py** | `process_file`/`_handle_takeover_mode` 各自解析后缀/内容 | 提取 `_load_md_or_pdf()` 统一读取 .md/.pdf |
-| **commands/markdown_graph.py** | 仅全局统计；`_update_doi_map` 不返回值 | `_update_doi_map` 返回 entry；新增 `FolderStats` 类按 `--depth` 分文件夹统计；微调 trophy 打印（去掉多余空行） |
-| **commands/match.py** | PA/DOI 全文扫描无记忆；Chi/Claude 串行 IO | 新增 `doi_memo` 缓存避免重复扫描；ThreadPoolExecutor 并行读取；`_apply_found` 统一 PA/FE 落地逻辑；`FUZZY_THRESHOLD = SM_QUICK` |
-| **commands/pdf2md.py** | 直接 `requests.get/post/put`；`extract_text` 嵌套循环 | 改用共享 `make_session()`；JSONDecodeError 导入路径修正；生成器 + `chain.from_iterable` 展平块 |
-| **commands/pmce.py** | 本地 `requests.Session`；`_fetch_fulltext_xml` 辅助；手写三项计数；`_print_non_oa` 在图前 | 改用 `make_session()`；删除辅助并内联；`Counter` 统计；`_print_non_oa` 移到图建立之后 |
-| **commands/reconcile.py** | 解析串行；PA 逻辑内联于循环 | ThreadPoolExecutor 并行解析 frontmatter/PA/PT；`pa_targets` 预计算字典 |
-| **commands/rename_pdf.py** | `re.sub` 内联；`fitz.open` 手动 close | 预编译 `ET_AL_RE`/`WS_RE`；`with fitz.open()` 上下文管理 |
-| **commands/trash.py** | `_scan_referenced`/内联集合推导 | 删除辅助，`run_trash` 内联；改用 `image_names()` |
-| **commands/unify_symbols.py** | 串行读改写 | 提取 `_fix_one()` + ThreadPoolExecutor 并行读写 |
-| **README.md** | 文末含「增量对比 (vs v3.3)」章节 | 删除该章节，文末止于「许可证 / MIT」；新增 `http` 章节与目录结构条目；本对比为其后追加 |
+| **commands/match.py** | 仅匹配 Vault 内 Clippings→PA/PT/FE；Claude 索引只含 Vault/Claude 现有文件 | 新增 `reconcile_claude` 模式（`--trash`）：并行扫描 `TRASH/Claude` 补齐 `pa_index`/`fe_index`/`pa_text`/`pa_reverse`；跟踪 `matched_stems` 与 `trash_reclaims`；未命中文件移入 TRASH，命中文件从 TRASH 回迁 Vault/Claude |
+| **core/refs.py** | `H1_WIKILINK_RE` 严格匹配 `# [[...|...]]`；`norm_stems` 仅做前缀剥离 | `H1_WIKILINK_RE` 放宽为可选 `[` 括号（容忍缺/多括号）；`norm_stems` 扩展小写、` - `→空格、破折号前缀、去尾部 `.` 等变体 |
+| **cli.py** | `match` 子命令仅 `--dry-run`/`--threshold`/`--force`/`-v`；help 为「匹配PA/PT/FE」 | `match` 新增 `--trash` 开关并传入 `run_match(..., reconcile_claude)`；help 改为「匹配PA/PT/FE + Claude同步调谐」 |
+| **README.md** | 文末含「增量对比 (vs v3.3)」章节（46 行） | 删除 vs v3.3 章节，文末止于「许可证 / MIT」；本对比为其后追加 |
 
 ### 关键变化
 
-- **新增 `core/http.py`**：全项目统一 HTTP 入口 `make_session()`，统一 User-Agent，crossref_api / pmce / pdf2md 全部改用共享会话（连接池复用、避免限流）。
-- **并行 IO 提速**：match / reconcile / unify_symbols 用 `ThreadPoolExecutor` 并行读取与解析（字典更新保持串行保序）；pdf2md 的 `_extract_json_data` 用生成器 + `chain` 展平。
-- **DOI 全文查找记忆化**：match 的 `_pa_by_doi` 新增 `doi_memo`，同一 DOI 只做一次全量扫描。
-- **`is_plausible_doi` 加缓存**：`@lru_cache(maxsize=16384)` 避免重复正则校验。
-- **出版日期解析优化**：crossref_api 用 `_parse_pubdate` 正则替代 `strptime`，非法输入返回 None 继续处理（不再抛异常跳过）。
-- **markdown 命令支持 `--depth`**：按文件夹层级输出各子目录引用图谱统计（`FolderStats`）。
-- **删除死代码**：frontmatter `read_fm`、pdf_extractor `extract_text`、pmce `_fetch_fulltext_xml`、trash `_scan_referenced` 等辅助函数被移除或内联。
-- **Bug/健壮性**：rename_pdf 改用 `with fitz.open()` 确保关闭；pmce 将 `_print_non_oa` 移到图谱建立后，避免图构建失败时遗漏输出。
-- **README**：移除上一轮「vs v3.3」章节，文末恢复为纯「许可证 MIT」，并在英中两处新增 `http` 模块文档；本对比章节为新增内容。
-
-> 注：`scripts/存档/PMCE.bat` 在 v3.4 也有改动（不在 `*.py`/`*.toml`/`*.md` 对比范围内，未详列）。
+- **match 新增 `--trash` Claude 同步调谐**：`run_match` 增加 `reconcile_claude` 参数，扫描 `OBSIDIAN_ROOT/TRASH/Claude`，把尚未被索引的 Claude 笔记补入 PA/FE 索引（`_figures` 后缀归 FE，其余归 PA，并解析 H1 wikilink 建立反向索引）。
+- **双向同步**：匹配结束后，将 Vault/Claude 中未命中的 `.md`（排除 `zh-CN` 与 `_figures`）移入 `TRASH/Claude/<vault名>/`；同时将本次匹配命中的 TRASH 文件回迁到对应 Vault 的 `Claude` 目录（`--dry-run` 时仅打印不落盘）。
+- **`core/refs.py` 正则与归一化增强**：`H1_WIKILINK_RE` 由严格 `# [[` 改为可选 `[` 括号；`norm_stems` 新增小写变体、` - `→空格、破折号前缀截断、去尾部 `.` 等归一化，提升 PA 匹配容错。
+- **cli 暴露开关**：`/s match` 子命令新增 `--trash`，将 `args.reconcile_claude` 透传给 `run_match`。
+- **README 精简**：移除上一轮「vs v3.3」增量对比章节，文末恢复为纯「许可证 MIT」，保持文档止于许可证；本对比章节为新追加内容。

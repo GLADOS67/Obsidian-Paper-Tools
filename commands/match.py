@@ -1,5 +1,6 @@
 """/s: Match Clippings to PT/PA/FE notes inside an Obsidian Vault."""
 
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -13,9 +14,11 @@ from core.refs import (
     parse_h1_wikilink, extract_wikilink_name, first_ref_target,
     extract_doi_set,
 )
+from config import OBSIDIAN_ROOT
 
 JACCARD_THRESHOLD = 0.85
 FUZZY_THRESHOLD = SM_QUICK
+TRASH_CLAUDE = OBSIDIAN_ROOT / 'TRASH' / 'Claude'
 
 
 def _extract_clippings_doi(fm: dict) -> Optional[str]:
@@ -174,7 +177,8 @@ def _find_chi(clip_md: Path, fm: dict, chi_reverse: Dict[str, Tuple[Path, str]],
 
 
 def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_THRESHOLD,
-              force: bool = False, verbose: bool = False) -> bool:
+              force: bool = False, verbose: bool = False,
+              reconcile_claude: bool = False) -> bool:
     base = Path(base_dir)
     clip_dir = base / 'Clippings'
     chi_dir = base / 'Chi'
@@ -185,6 +189,8 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
         print(f'ERROR: Chi 目录不存在: {chi_dir}')
         return False
     print(f'Clippings: {clip_dir}\nChi: {chi_dir}')
+    if reconcile_claude:
+        print(f'TRASH Claude: {TRASH_CLAUDE}')
     if dry_run:
         print('[DRY RUN]\n')
 
@@ -257,6 +263,31 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     print(f'Claude: {len(pa_index)} PA, {len(fe_index)} FE, '
           f'{len(pa_reverse)} PA-reverse, {len(fe_reverse)} FE-reverse\n')
 
+    trash_pa_source: Dict[str, Path] = {}
+    trash_fe_source: Dict[str, Path] = {}
+    if reconcile_claude and TRASH_CLAUDE.is_dir():
+        trash_files = sorted(TRASH_CLAUDE.rglob('*.md'))
+        with ThreadPoolExecutor() as ex:
+            trash_texts = list(ex.map(_read_text_safe, trash_files))
+        for md, text in zip(trash_files, trash_texts):
+            stem = md.stem
+            if 'zh-CN' in stem:
+                continue
+            if stem.endswith('_figures'):
+                if stem[:-8] not in fe_index:
+                    fe_index[stem[:-8]] = md
+                    trash_fe_source[stem[:-8]] = md
+                continue
+            if stem not in pa_index:
+                pa_index[stem] = md
+                trash_pa_source[stem] = md
+                pa_text[stem] = text.lower()
+                if h1_info := parse_h1_wikilink(text):
+                    clip_stem, ch_title = h1_info
+                    pa_reverse[clip_stem] = (md, ch_title)
+                    pa_reverse[clip_stem.replace('_', ' ')] = (md, ch_title)
+        print(f'TRASH: {len(trash_pa_source)} PA, {len(trash_fe_source)} FE scanned\n')
+
     stats = {
         'pt': {'matched': 0, 'skipped': 0, 'failed': 0,
                'methods': {'reverse': 0, 'source': 0, 'first_ref': 0, 'jaccard': 0}},
@@ -264,6 +295,8 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
         'fe': {'matched': 0, 'skipped': 0, 'failed': 0},
     }
     doi_memo: Dict[str, Optional[Tuple[Path, Optional[str], str]]] = {}
+    matched_stems: set = set()
+    trash_reclaims: Dict[str, str] = {}
 
     for clip_md in sorted(clip_dir.rglob('*.md')):
         fm, body = parse_frontmatter_file(clip_md)
@@ -311,12 +344,22 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
         stats['pa']['skipped'] += pa_result == 'skipped'
         stats['pa']['failed'] += pa_result == 'failed'
         any_changed |= pa_result == 'matched'
+        pa_stem = pa_path.stem if pa_path else extract_wikilink_name(fm.get('paper-analyze'))
+        if pa_stem:
+            matched_stems.add(pa_stem)
+            if pa_stem in trash_pa_source:
+                trash_reclaims[pa_stem] = base.name
 
-        fe_result, _ = _match_fe(clip_md, fm, fe_index, fe_reverse, force)
+        fe_result, fe_path = _match_fe(clip_md, fm, fe_index, fe_reverse, force)
         stats['fe']['matched'] += fe_result == 'matched'
         stats['fe']['skipped'] += fe_result == 'skipped'
         stats['fe']['failed'] += fe_result == 'failed'
         any_changed |= fe_result == 'matched'
+        fe_stem = fe_path.stem if fe_path else extract_wikilink_name(fm.get('figure-extractor'))
+        if fe_stem:
+            matched_stems.add(fe_stem)
+            if fe_stem in trash_fe_source:
+                trash_reclaims[fe_stem] = base.name
 
         if any_changed and not dry_run:
             clip_md.write_text(dump_frontmatter(fm, body), encoding='utf-8')
@@ -330,4 +373,45 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
           f'Failed: {stats["pa"]["failed"]}')
     print(f'[FE] Matched: {stats["fe"]["matched"]}  Skipped: {stats["fe"]["skipped"]}  '
           f'Failed: {stats["fe"]["failed"]}')
+
+    if not reconcile_claude:
+        return stats['pt']['matched'] + stats['pa']['matched'] + stats['fe']['matched'] > 0
+
+    print(f'\n--- Claude Trash Reconciliation ---')
+    vault_claude_dir = base / 'Claude'
+    moved_to_trash = 0
+    reclaimed = 0
+
+    if vault_claude_dir.is_dir():
+        vault_name = base.name
+        trash_target = TRASH_CLAUDE / vault_name
+        for md in sorted(vault_claude_dir.rglob('*.md')):
+            if md.stem in matched_stems or 'zh-CN' in md.stem:
+                continue
+            if md.stem.endswith('_figures'):
+                continue
+            rel = md.relative_to(vault_claude_dir)
+            dest = trash_target / rel.parent
+            if not dry_run:
+                dest.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(md), str(dest / md.name))
+            moved_to_trash += 1
+        for stem, vault in trash_reclaims.items():
+            src = trash_pa_source.get(stem) or trash_fe_source.get(stem)
+            if not src or not src.exists():
+                continue
+            dest_vault_claude = OBSIDIAN_ROOT / vault / 'Claude'
+            subdir = src.parent.relative_to(TRASH_CLAUDE)
+            dest_dir = dest_vault_claude / subdir.relative_to(subdir.parts[0]) if subdir.parts and subdir.parts[0] != '.' else dest_vault_claude
+            dest = dest_dir / src.name
+            if dest.exists():
+                continue
+            if not dry_run:
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(src), str(dest))
+            reclaimed += 1
+            print(f'[RECLAIM] {src.name} -> {vault}/Claude')
+
+    print(f'  Vault Claude → TRASH: {moved_to_trash} files')
+    print(f'  TRASH → Vault Claude: {reclaimed} files')
     return stats['pt']['matched'] + stats['pa']['matched'] + stats['fe']['matched'] > 0
