@@ -61,14 +61,12 @@ def main():
 
     sub.add_parser('crossref', help='Crossref参考文献工具').add_argument('input', nargs='?', default=None, help='输入(可选)')
 
-    p_match = sub.add_parser('match', help='匹配PA/PT/FE + Claude同步调谐')
+    p_match = sub.add_parser('match', help='匹配PA/PT/FE')
     p_match.add_argument('base_dir')
     p_match.add_argument('--dry-run', action='store_true')
     p_match.add_argument('--threshold', type=float, default=JACCARD_THRESHOLD)
     p_match.add_argument('--force', action='store_true')
     p_match.add_argument('-v', '--verbose', action='store_true')
-    p_match.add_argument('--trash', action='store_true', dest='reconcile_claude',
-                         help='扫描TRASH/Claude，匹配后调谐未引用文件')
 
     sub.add_parser('trash', help='归档子目录').add_argument('path')
 
@@ -119,8 +117,7 @@ def main():
     handlers = {
         'markdown': lambda: run_markdown_graph(args.path, args.depth),
         'crossref': lambda: crossref_handle(args.input) if args.input else run_crossref_interactive(),
-        'match': lambda: run_match(args.base_dir, args.dry_run, args.threshold,
-                                   args.force, args.verbose, args.reconcile_claude),
+        'match': lambda: run_match(args.base_dir, args.dry_run, args.threshold, args.force, args.verbose),
         'trash': lambda: run_trash(args.path),
         'remove-doi': lambda: _cmd_remove_doi(args),
         'cited-by': lambda: run_cited_by_interactive() if args.path == '-' else run_cited_by(args.path, args.max),
