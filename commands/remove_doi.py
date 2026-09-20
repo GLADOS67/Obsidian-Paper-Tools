@@ -1,5 +1,3 @@
-"""/s: Remove wrong DOI wikilinks from Obsidian Vault .md files."""
-
 from concurrent.futures import ThreadPoolExecutor
 from itertools import repeat
 from pathlib import Path

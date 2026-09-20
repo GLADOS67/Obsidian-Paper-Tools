@@ -1,5 +1,3 @@
-"""/s: Markdown body cleaning for Obsidian Vault notes."""
-
 import re
 from core.doi import PATTERN_DOI
 

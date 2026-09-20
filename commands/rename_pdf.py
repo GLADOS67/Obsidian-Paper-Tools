@@ -1,5 +1,3 @@
-"""/s: Extract paper titles with PyMuPDF to auto-rename PDFs in Obsidian Vault."""
-
 import os
 import re
 import threading

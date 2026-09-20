@@ -1,5 +1,3 @@
-"""/s: Crossref API + PubMed E-utilities client for DOI references and cited-by."""
-
 import json
 import random
 import re

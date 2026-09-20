@@ -1,5 +1,3 @@
-"""/s: YAML frontmatter parse/dump for Obsidian Vault notes."""
-
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -43,9 +41,6 @@ def parse_frontmatter_file(path: Path) -> Tuple[Optional[Dict], str]:
         raw = data.decode('utf-8', errors='replace')
     fm, rest = parse_frontmatter_str(raw)
     return fm or None, rest
-
-
-
 
 
 def dump_frontmatter(fm: Dict, body: str) -> str:

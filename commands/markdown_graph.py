@@ -1,5 +1,3 @@
-"""/s: Build global DOI citation graph across Obsidian Vault .md files."""
-
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -151,59 +149,70 @@ def _process_one_file(file: Path, unique_map: Dict[str, DoiEntry],
     return (file, fm, rest)
 
 
-class FolderStats:
-    __slots__ = ('path',)
+def _parse_fm_or_none(f: Path) -> Optional[Dict]:
+    try:
+        content = normalize_unicode_dashes(f.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+    fm, _ = parse_frontmatter_str(content)
+    return fm if isinstance(fm, dict) else None
 
-    def __init__(self, path: Path):
-        self.path = path
 
-    def compute_and_print(self):
-        md_files = sorted(self.path.rglob('*.md'))
-        if not md_files:
-            return
-        unique_map: Dict[str, DoiEntry] = {}
-        cited_by_map: Dict[str, Tuple[str, List[str]]] = {}
-        for f in md_files:
-            try:
-                content = normalize_unicode_dashes(f.read_text(encoding='utf-8'))
-            except Exception:
+def _collect_stats_maps(md_files: List[Path]) -> Tuple[Dict[str, DoiEntry], Dict[str, Tuple[str, List[str]]]]:
+    """IO并行解析frontmatter，map更新保持原顺序串行（与单线程结果一致）。"""
+    unique_map: Dict[str, DoiEntry] = {}
+    cited_by_map: Dict[str, Tuple[str, List[str]]] = {}
+    with ThreadPoolExecutor() as ex:
+        fms = list(ex.map(_parse_fm_or_none, md_files))
+    for f, fm in zip(md_files, fms):
+        if fm is None:
+            continue
+        for ref in fm.get('reference', []):
+            ref = ref.strip()
+            if not ref:
                 continue
-            fm, _ = parse_frontmatter_str(content)
-            if not isinstance(fm, dict):
-                continue
-            for ref in fm.get('reference', []):
-                ref = ref.strip()
-                if not ref:
-                    continue
-                parsed = split_wikilink(ref)
-                if parsed:
-                    display_doi, name_part = process_doi(parsed[1])[0], parsed[0]
-                    if is_plausible_doi(display_doi):
-                        _update_doi_map(display_doi, name_part, unique_map, f.stem, slot=0)
-            for item in fm.get('cited_by', []):
-                if p := _parse_cited_by_entry(item):
-                    name, disp = p
-                    dl = disp.lower()
-                    cited_by_map.setdefault(dl, (disp, []))
-                    if f.stem not in cited_by_map[dl][1]:
-                        cited_by_map[dl][1].append(f.stem)
-                    _update_doi_map(disp, name, unique_map, f.stem, slot=1)
-        rel = self.path.name
-        print(f'\n📁 {rel}')
-        missing = [(doi, entry[0][1]) for doi, entry in unique_map.items()
-                   if entry[0][0] is None and entry[1][0] is None]
-        if missing:
-            doi, stems = max(missing, key=lambda x: len(x[1]))
-            print(f'🏆 引用最多的目前不存在的DOI：{doi} （被引 {len(stems)} 次）')
-        else:
-            print('未找到符合条件的目前不存在的DOI')
-        external_cited = {k: v for k, v in cited_by_map.items()
-                          if _shared_spec(unique_map.get(k)) is None}
-        if external_cited:
-            doi_lower, (disp, stems) = max(external_cited.items(), key=lambda x: len(x[1][1]))
-            print(f'🏆 cited_by 出现最多的目前不存在的外部 DOI：{disp} （被 {len(stems)} 篇论文收录）')
-        else:
-            print('未找到符合条件的目前不存在的外部 cited_by DOI')
+            parsed = split_wikilink(ref)
+            if parsed:
+                display_doi, name_part = process_doi(parsed[1])[0], parsed[0]
+                if is_plausible_doi(display_doi):
+                    _update_doi_map(display_doi, name_part, unique_map, f.stem, slot=0)
+        for item in fm.get('cited_by', []):
+            if p := _parse_cited_by_entry(item):
+                name, disp = p
+                dl = disp.lower()
+                cited_by_map.setdefault(dl, (disp, []))
+                if f.stem not in cited_by_map[dl][1]:
+                    cited_by_map[dl][1].append(f.stem)
+                _update_doi_map(disp, name, unique_map, f.stem, slot=1)
+    return unique_map, cited_by_map
+
+
+def _print_top_orphans(unique_map: Dict[str, DoiEntry],
+                       cited_by_map: Dict[str, Tuple[str, List[str]]], lead: str = '') -> None:
+    """打印「引用最多但不存在的DOI」与「cited_by最多但不存在的外部DOI」两条战报。"""
+    missing = [(doi, e[0][1]) for doi, e in unique_map.items()
+               if e[0][0] is None and e[1][0] is None]
+    if missing:
+        doi, stems = max(missing, key=lambda x: len(x[1]))
+        print(f'{lead}🏆 引用最多的目前不存在的DOI：{doi} （被引 {len(stems)} 次）')
+    else:
+        print(f'{lead}未找到符合条件的目前不存在的DOI')
+    external_cited = {k: v for k, v in cited_by_map.items()
+                      if _shared_spec(unique_map.get(k)) is None}
+    if external_cited:
+        _, (disp, stems) = max(external_cited.items(), key=lambda x: len(x[1][1]))
+        print(f'🏆 cited_by 出现最多的目前不存在的外部 DOI：{disp} （被 {len(stems)} 篇论文收录）')
+    else:
+        print('未找到符合条件的目前不存在的外部 cited_by DOI')
+
+
+def _print_folder_stats(folder: Path) -> None:
+    md_files = sorted(folder.rglob('*.md'))
+    if not md_files:
+        return
+    unique_map, cited_by_map = _collect_stats_maps(md_files)
+    print(f'\n📁 {folder.name}')
+    _print_top_orphans(unique_map, cited_by_map)
 
 
 def run_markdown_graph(directory: str, depth: int = 0) -> None:
@@ -245,27 +254,13 @@ def run_markdown_graph(directory: str, depth: int = 0) -> None:
             print(f'  ❌ {file.name} 保存失败 → {str(e)}')
 
     if depth > 0:
-        all_folders = []
+        tiers: Dict[int, List[Path]] = {}
+        for p in target.rglob('*'):
+            if p.is_dir() and (d := len(p.relative_to(target).parts)) <= depth:
+                tiers.setdefault(d, []).append(p)
         for d in range(1, depth + 1):
-            tier = sorted(p for p in target.rglob('*')
-                          if p.is_dir() and len(p.relative_to(target).parts) == d
-                          and any(p.rglob('*.md')))
-            all_folders.extend(tier)
-        for folder in all_folders:
-            FolderStats(folder).compute_and_print()
+            for folder in sorted(tiers.get(d, [])):
+                _print_folder_stats(folder)
 
     print('\n🎉 全部处理完成！')
-    missing = [(doi, ref[1]) for doi, (ref, cb) in unique_map.items() if ref[0] is None and cb[0] is None]
-    if missing:
-        doi, stems = max(missing, key=lambda x: len(x[1]))
-        print(f'\n🏆 引用最多的目前不存在的DOI：{doi} （被引 {len(stems)} 次）')
-    else:
-        print('\n未找到符合条件的目前不存在的DOI')
-
-    external_cited = {k: v for k, v in cited_by_map.items()
-                      if _shared_spec(unique_map.get(k)) is None}
-    if external_cited:
-        doi_lower, (disp, stems) = max(external_cited.items(), key=lambda x: len(x[1][1]))
-        print(f'🏆 cited_by 出现最多的目前不存在的外部 DOI：{disp} （被 {len(stems)} 篇论文收录）')
-    else:
-        print('未找到符合条件的目前不存在的外部 cited_by DOI')
+    _print_top_orphans(unique_map, cited_by_map, lead='\n')

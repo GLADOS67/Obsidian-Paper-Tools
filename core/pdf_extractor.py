@@ -1,5 +1,3 @@
-"""/s: pdfplumber + PyMuPDF PDF metadata and first-page title extraction."""
-
 import multiprocessing
 import queue
 import re
@@ -108,7 +106,7 @@ def table_to_md(table):
 
 def merge_paragraphs(text):
     lines = text.split('\n')
-    result = [lines[0].rstrip()] if lines else []
+    result = [lines[0].rstrip()]
     for line in lines[1:]:
         curr, prev = line.rstrip(), result[-1]
         if not curr:

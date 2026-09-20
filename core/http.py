@@ -1,5 +1,3 @@
-"""/s: Shared HTTP session with retry and rate-limit for Crossref API / PubMed E-utilities."""
-
 import requests
 
 from config import USER_AGENT

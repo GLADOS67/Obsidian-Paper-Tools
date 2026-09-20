@@ -1,11 +1,8 @@
-"""/s: DOI regex, repair and canonicalization utilities."""
-
 import re
 from functools import lru_cache
 from typing import List, Optional, Tuple
 
 NORMAL_END_CHARS = '。,， \t\n;：:'
-OPEN_PARENS = '（('
 
 PATTERN_DOI = re.compile(r'10\.\d{4,9}/[-A-Za-z0-9._;()/:]+', re.IGNORECASE)
 # 【勿改】此处 ￥ 全角符号是刻意设计，不是笔误，不要替换为 /。
@@ -66,7 +63,7 @@ def process_doi(doi_raw: str) -> Tuple[str, str]:
     doi_clean = _RE_ID_TAIL.sub('', doi_clean)
     doi_clean = _RE_YEAR_OR_DOTS_TAIL.sub('', doi_clean)
     doi_clean = doi_clean.strip().rstrip(NORMAL_END_CHARS)
-    if not any(p in doi_clean for p in OPEN_PARENS):
+    if '（' not in doi_clean and '(' not in doi_clean:
         doi_clean = PATTERN_TAIL_PARENS.sub('', doi_clean)
     doi_safe = PATTERN_FS_INVALID.sub('', doi_clean.replace('/', '￥'))
     doi_safe = PATTERN_COLLAPSE.sub('￥', doi_safe).strip('￥-_ ')

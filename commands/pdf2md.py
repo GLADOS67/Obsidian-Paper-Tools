@@ -1,5 +1,3 @@
-"""/s: MinerU PDF batch-to-Markdown pipeline with DOI / Crossref / PubMed enrichment."""
-
 import json
 import os
 import re
@@ -141,13 +139,6 @@ def _replace_urls(content, urls):
 
 
 
-def _update_cited_by(fm, main_doi, crossref_cache, cited_by_max, clippings_doi_set):
-    if cited_by_fresh(fm):
-        return
-    _, citing_dois = get_cited_by_pubmed(main_doi, crossref_cache, clippings_doi_set, cited_by_max)
-    apply_cited_by(fm, citing_dois)
-
-
 def _merge_new_dois(fm, all_dois, md_name):
     unique_dois = {doi.lower(): doi for doi in all_dois}
     if not unique_dois:
@@ -197,7 +188,9 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_ca
     if enable_cited_by and main_doi:
         if clippings_doi_set is None:
             clippings_doi_set = build_doi_set(md_dst.parent)
-        _update_cited_by(fm, main_doi, crossref_cache, cited_by_max, clippings_doi_set)
+        if not cited_by_fresh(fm):
+            _, citing_dois = get_cited_by_pubmed(main_doi, crossref_cache, clippings_doi_set, cited_by_max)
+            apply_cited_by(fm, citing_dois)
 
     existing_refs = fm.get('reference', [])
     if existing_refs:
@@ -292,6 +285,14 @@ def _find_extracted_files(temp_dir):
             break
     return md_src, img_src, json_src
 
+
+
+def _move_to_trash(p: Path, trash_dir: Path, label: str) -> None:
+    try:
+        shutil.move(str(p), str(trash_dir / p.name))
+        print(f'    {label} → TRASH')
+    except Exception as e:
+        print(f'    {label}移入TRASH失败: {e}')
 
 
 def _mark_pdf_done(pdf_file_path: Path, trash_dir: Path = None):
@@ -444,30 +445,19 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
             filtered.append(pdf_file)
             continue
         md_path = global_index.get(pdf_file.stem)
-        if md_path and md_path.exists():
-            print(f'[A] 已完成: {pdf_file.name}')
-            if md_path.resolve() == (pm / f'{pdf_file.stem}.md').resolve():
-                print(f'    MD已就位: {md_path}')
-            else:
-                print(f'    发现跨vault MD: {md_path.parent.parent.parent.name}')
-                dst = pm / f'{pdf_file.stem}.md'
-                if try_copy(md_path, dst):
-                    print(f'    硬链接成功: {dst.name}')
-                else:
-                    print(f'    硬链接失败(目标已存在)')
-            try:
-                shutil.move(str(pdf_file), str(trash_dir / pdf_file.name))
-                print(f'    PDF → TRASH')
-            except Exception as e:
-                print(f'    PDF移入TRASH失败: {e}')
-        else:
+        if not (md_path and md_path.exists()):
             print(f'[B] 无MD记录: {pdf_file.name}  重处理中')
             filtered.append(pdf_file)
-            try:
-                shutil.move(str(done_path), str(trash_dir / done_path.name))
-                print(f'    完成标记 → TRASH')
-            except Exception as e:
-                print(f'    完成标记移入TRASH失败: {e}')
+            _move_to_trash(done_path, trash_dir, '完成标记')
+            continue
+        print(f'[A] 已完成: {pdf_file.name}')
+        if md_path.resolve() == (pm / f'{pdf_file.stem}.md').resolve():
+            print(f'    MD已就位: {md_path}')
+        else:
+            print(f'    发现跨vault MD: {md_path.parent.parent.parent.name}')
+            dst = pm / f'{pdf_file.stem}.md'
+            print(f'    硬链接成功: {dst.name}' if try_copy(md_path, dst) else '    硬链接失败(目标已存在)')
+        _move_to_trash(pdf_file, trash_dir, 'PDF')
     pdf_files = filtered
     if not pdf_files:
         print('未找到需处理PDF')

@@ -1,5 +1,3 @@
-"""/s: Query PubMed E-utilities for papers citing a given DOI."""
-
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -59,7 +57,7 @@ def _process_cited_file(md_file: Path, cache: dict, existing: set,
 
 
 def run_cited_by(path: str, max_rows: int = 10) -> None:
-    resolved = resolve_input_path(path) or resolve_input_path(path, fallback_search=True)
+    resolved = resolve_input_path(path, fallback_search=True)
     if resolved is None:
         print(f'无法解析Obsidian路径: {path}')
         return

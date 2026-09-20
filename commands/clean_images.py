@@ -1,5 +1,3 @@
-"""/s: Remove unreferenced images from an Obsidian Vault."""
-
 import os
 import re
 import shutil

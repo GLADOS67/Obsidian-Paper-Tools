@@ -3,5 +3,5 @@ chcp 65001 > nul
 setlocal
 set "current_dir=%~dp0"
 set "current_dir=%current_dir:~0,-1%"
-python "C:\ResearchFront\Claude\Obsidian-Paper-Tools\cli.py" markdown --path "%current_dir%\Clippings"
+python "C:\ResearchFront\Claude\Obsidian-Paper-Tools\cli.py" markdown --path "%current_dir%\Clippings" --depth 1
 timeout /t 30

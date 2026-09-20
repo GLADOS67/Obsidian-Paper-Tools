@@ -1,4 +1,12 @@
-"""/s: PubMed MeSH Concept Explorer - queries PubMed E-utilities for MeSH terms and codes."""
+"""PMID/DOI/标题 → EuropePMC全文抓取 → Clippings/PENDING MD。
+
+技术路径:
+  1. 输入(文件路径 / 直贴文本 / 交互粘贴) → 正则提取 DOI/PMID/标题
+  2. EuropePMC search (resultType=core) 批量取元数据 + pmcid + isOpenAccess
+  3. OA条目: fullTextXML (JATS) → 标准库ET解析 → 无frontmatter MD
+  4. 非OA条目: print doi-标题
+  5. 收尾自动 run_markdown_graph(Clippings)
+"""
 
 import html
 import random
@@ -8,6 +16,8 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 from difflib import SequenceMatcher
 from pathlib import Path
+
+from curl_cffi import requests as curl_requests
 
 from core.doi import (PATTERN_DOI, PATTERN_FS_INVALID, find_plausible_dois,
                       normalize_unicode_dashes, process_doi)
@@ -25,6 +35,7 @@ PATTERN_BARE_NUM = re.compile(r'(?<![\d.])(\d{7,9})(?![\d.])')
 PATTERN_LINE_JUNK = re.compile(r'[|\[\]()*#-]')
 PATTERN_HTML_TAG = re.compile(r'<[^>]+>')
 PATTERN_INLINE_DOI = re.compile(r'\s*doi:\s*10\.\d{4,9}/[-A-Za-z0-9._;()/:]+', re.IGNORECASE)
+PATTERN_TEX_BODY = re.compile(r'\\begin\{document\}(.+?)\\end\{document\}', re.DOTALL)
 _TITLE_SIM = 0.5
 _CHUNK = 40
 
@@ -156,13 +167,20 @@ def _get_figure_urls(pmcid):
         r = _http.get(f'https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?format=json',
                       timeout=30)
         if r.status_code != 200:
-            return {}
+            raise ConnectionError(r.status_code)
     except Exception:
-        return {}
+        try:
+            r = curl_requests.get(
+                f'https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?format=json',
+                timeout=30, impersonate='chrome120')
+            if r.status_code != 200:
+                return {}
+        except Exception:
+            return {}
     mapping = {}
     pmcid_num = pmcid.replace('PMC', '', 1)
     for m in re.finditer(r'blobs/[A-Za-z0-9]+/' + re.escape(pmcid_num)
-                         + r'/[A-Za-z0-9]+/([A-Za-z0-9_.\-]+)', r.text):
+                          + r'/[A-Za-z0-9]+/([A-Za-z0-9_.\-]+)', r.text):
         fname = m.group(1)
         if fname not in mapping:
             mapping[fname] = f'https://cdn.ncbi.nlm.nih.gov/pmc/{m.group(0)}'
@@ -210,6 +228,19 @@ def _para(elem):
     return ' '.join(_inline(elem).split())
 
 
+def _formula_md(el, is_inline=False):
+    tex = _first(el, 'tex-math')
+    if tex is None or not tex.text:
+        return []
+    m = PATTERN_TEX_BODY.search(tex.text)
+    if not m:
+        return []
+    math = m.group(1).strip()
+    if is_inline and math.startswith('$$') and math.endswith('$$'):
+        math = f'${math[2:-2]}$'
+    return [math]
+
+
 def _blocks_md(container, level, pmcid, lines):
     for el in container:
         tag = _local(el.tag)
@@ -217,7 +248,20 @@ def _blocks_md(container, level, pmcid, lines):
             if _first(el, 'ref-list') is None:
                 _sec_md(el, level, pmcid, lines)
         elif tag == 'p':
-            lines.append(_para(el))
+            fig_formula = list(_iter(el, 'fig')) + list(_iter(el, 'disp-formula'))
+            if fig_formula:
+                for c in fig_formula:
+                    el.remove(c)
+                lines.append(_para(el))
+                for c in fig_formula:
+                    if _local(c.tag) == 'fig':
+                        lines.extend(_fig_md(c, pmcid))
+                    else:
+                        lines.extend(_formula_md(c))
+            else:
+                lines.append(_para(el))
+        elif tag == 'disp-formula':
+            lines.extend(_formula_md(el))
         elif tag == 'table-wrap':
             lines.extend(_table_md(el))
         elif tag == 'fig':

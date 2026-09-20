@@ -1,5 +1,3 @@
-"""/s: Replace Unicode symbols with ASCII equivalents across Obsidian Vault .md files."""
-
 import re
 from concurrent.futures import ThreadPoolExecutor
 from itertools import repeat

@@ -1,5 +1,3 @@
-"""/s: Reconcile PA/PT/FE frontmatter links across Obsidian Vault notes."""
-
 import re
 import shutil
 import sys

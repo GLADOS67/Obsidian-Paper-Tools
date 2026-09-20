@@ -1,5 +1,3 @@
-"""/s: Archive subdirectories into dated folders inside Obsidian Vault."""
-
 import os
 import shutil
 import zipfile
