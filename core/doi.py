@@ -39,9 +39,6 @@ CANONICAL_CHAR_TABLE = str.maketrans({
     '\u2014': '-', '\u2015': '-', '\u2212': '-',
     '\u2026': '...',
 })
-SMART_QUOTE_TABLE = CANONICAL_CHAR_TABLE
-
-
 def repair_doi_text(text: str) -> str:
     text = text.translate(PDF_ARTIFACTS)
     text = PATTERN_DOI_SPLICE.sub('', text)

@@ -58,22 +58,13 @@ def _api_get(url: str, params: dict = None, timeout: int = 10) -> Optional[dict]
         return None
 
 
-def _lookup_cache(key: str, cache: dict, lock: threading.Lock = None):
-    with lock or nullcontext():
-        val = cache.get(key)
-    return (val[0], val[1]) if isinstance(val, (tuple, list)) and len(val) == 2 else None
-
-
-def _set_cache(key: str, value, cache: dict, lock: threading.Lock = None):
-    with lock or nullcontext():
-        cache[key] = value
-
-
 def get_doi_from_citation(citation_text: str, cache: dict = None,
                          lock: threading.Lock = None) -> Optional[Tuple[str, str]]:
     cache = cache or {}
     key = f'cite:{citation_text.strip()}'
-    cached = _lookup_cache(key, cache, lock)
+    with lock or nullcontext():
+        val = cache.get(key)
+    cached = (val[0], val[1]) if isinstance(val, (tuple, list)) and len(val) == 2 else None
     if cached is not None:
         return cached
     data = _api_get(CROSSREF_API_BASE, params={
@@ -92,7 +83,8 @@ def get_doi_from_citation(citation_text: str, cache: dict = None,
     if not doi:
         print(f'Crossref结果无DOI: {title[:80]}')
     result = (doi, title) if doi else None
-    _set_cache(key, result, cache, lock)
+    with lock or nullcontext():
+        cache[key] = result
     return result
 
 
@@ -167,15 +159,12 @@ def get_cited_by_pubmed(doi: str, cache: dict = None,
     existing_dois = existing_dois or set()
     count_key, list_key = f'pm_citedby:{doi}', f'pm_citedby_list:{doi}'
 
-    def _fresh(all_dois: List[str]) -> List[str]:
-        return [d for d in all_dois if d.lower() not in existing_dois][:max_rows]
-
     if count_key in cache and list_key in cache:
-        return cache[count_key], _fresh(cache[list_key])
+        return cache[count_key], [d for d in cache[list_key] if d.lower() not in existing_dois][:max_rows]
 
     def _finalize(total: int, all_dois: List[str]) -> Tuple[int, List[str]]:
         cache[count_key], cache[list_key] = total, all_dois
-        return total, _fresh(all_dois)
+        return total, [d for d in all_dois if d.lower() not in existing_dois][:max_rows]
 
     base = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
     data = _api_get(f'{base}/esearch.fcgi',

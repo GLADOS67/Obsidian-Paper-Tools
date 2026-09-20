@@ -260,12 +260,10 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     for fe_stem, fe_path in fe_index.items():
         space_stem = fe_stem.replace('_', ' ')
         if fe_stem in pa_index:
-            ch = pa_alias.get(fe_stem)
-            if ch:
+            if ch := pa_alias.get(fe_stem):
                 fe_reverse[fe_stem] = (fe_path, ch)
         elif space_stem in pa_reverse:
-            fe_reverse[space_stem] = (fe_path, pa_reverse[space_stem][1])
-            fe_reverse[fe_stem] = (fe_path, pa_reverse[space_stem][1])
+            fe_reverse[space_stem] = fe_reverse[fe_stem] = (fe_path, pa_reverse[space_stem][1])
 
     print(f'Claude: {len(pa_index)} PA, {len(fe_index)} FE, '
           f'{len(pa_reverse)} PA-reverse, {len(fe_reverse)} FE-reverse\n')

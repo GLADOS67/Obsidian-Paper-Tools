@@ -45,13 +45,9 @@ def _process_cited_file(md_file: Path, cache: dict, existing: set,
     with lock:
         count, citing_dois = get_cited_by_pubmed(main_doi, cache, existing, max_rows)
     apply_cited_by(fm, citing_dois)
-    if citing_dois:
-        with lock:
-            existing.update(d.lower() for d in citing_dois)
-        print(f'[OK] {md_file.name}: cited_by_date={fm["cited_by_date"]}  新增 {len(citing_dois)} 篇')
-    else:
-        fm.pop('cited_by', None)
-        print(f'[OK] {md_file.name}: cited_by_date={fm["cited_by_date"]}  无新增')
+    with lock:
+        existing.update(d.lower() for d in citing_dois)
+    print(f'[OK] {md_file.name}: cited_by_date={fm["cited_by_date"]}  新增 {len(citing_dois)} 篇')
 
     md_file.write_text(dump_frontmatter(fm, body), encoding='utf-8')
 

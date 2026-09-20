@@ -67,14 +67,14 @@ def _rebuild_reference_list(refs: List, unique_map: Dict[str, DoiEntry],
         if dedup_key in seen:
             continue
         seen.add(dedup_key)
+        is_safe = bool(PATTERN_SAFE_DOI.match(name_part))
         if citing_stem is not None:
             entry = _update_doi_map(display_doi, name_part, unique_map, citing_stem)
             used_name = entry[0][0] or entry[1][0] or process_doi(display_doi)[1]
-            special_count += int(not PATTERN_SAFE_DOI.match(name_part))
         else:
-            spec = _shared_spec(unique_map.get(dedup_key))
-            is_safe = PATTERN_SAFE_DOI.match(name_part)
-            used_name = spec or (process_doi(display_doi)[1] if is_safe else name_part)
+            entry_spec = _shared_spec(unique_map.get(dedup_key))
+            used_name = entry_spec or (process_doi(display_doi)[1] if is_safe else name_part)
+        special_count += int(not is_safe)
         result.append(f'[[{used_name}|{display_doi}]]')
     return result, special_count
 
@@ -92,11 +92,10 @@ def _resolve_self_doi(file_stem: str, refs: List[str]) -> Optional[str]:
         return None
     for ref in refs:
         if (p := split_wikilink(ref)) and p[0].strip() == file_stem:
-            m = PATTERN_DOI.search(p[1])
-            if m:
+            if m := PATTERN_DOI.search(p[1]):
                 return process_doi(m.group(0))[0]
     first = refs[0]
-    inner = first[2:-2] if (first.startswith('[[') and first.endswith(']]')) else first
+    inner = first[2:-2] if first.startswith('[[') and first.endswith(']]') else first
     doi_part = inner.partition('|')[2] or inner
     m = PATTERN_DOI.search(doi_part)
     return process_doi(m.group(0))[0] if m else None
@@ -158,12 +157,7 @@ def _parse_fm_or_none(f: Path) -> Optional[Dict]:
     return fm if isinstance(fm, dict) else None
 
 
-def _collect_stats_maps(md_files: List[Path]) -> Tuple[Dict[str, DoiEntry], Dict[str, Tuple[str, List[str]]]]:
-    """IO并行解析frontmatter，map更新保持原顺序串行（与单线程结果一致）。"""
-    unique_map: Dict[str, DoiEntry] = {}
-    cited_by_map: Dict[str, Tuple[str, List[str]]] = {}
-    with ThreadPoolExecutor() as ex:
-        fms = list(ex.map(_parse_fm_or_none, md_files))
+def _build_maps_from_fms(md_files, fms, unique_map, cited_by_map):
     for f, fm in zip(md_files, fms):
         if fm is None:
             continue
@@ -184,6 +178,14 @@ def _collect_stats_maps(md_files: List[Path]) -> Tuple[Dict[str, DoiEntry], Dict
                 if f.stem not in cited_by_map[dl][1]:
                     cited_by_map[dl][1].append(f.stem)
                 _update_doi_map(disp, name, unique_map, f.stem, slot=1)
+
+
+def _collect_stats_maps(md_files: List[Path]) -> Tuple[Dict[str, DoiEntry], Dict[str, Tuple[str, List[str]]]]:
+    unique_map: Dict[str, DoiEntry] = {}
+    cited_by_map: Dict[str, Tuple[str, List[str]]] = {}
+    with ThreadPoolExecutor() as ex:
+        fms = list(ex.map(_parse_fm_or_none, md_files))
+    _build_maps_from_fms(md_files, fms, unique_map, cited_by_map)
     return unique_map, cited_by_map
 
 

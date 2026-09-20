@@ -214,9 +214,8 @@ def _handle_takeover_mode(file_path: Path, cache: dict) -> None:
         return
     print(f'￥ 接管模式: {file_path}')
     stem = file_path.stem
-    fm = fm_data if suffix == '.md' else {}
-    title = fm.get('title', stem)
-    md_title = _get_md_title(content, fm, stem)
+    title = fm_data.get('title', stem) if suffix == '.md' else stem
+    md_title = _get_md_title(content, fm_data, stem)
     print(f'使用标题搜索: {title}')
     main_doi = _resolve_doi_by_title(title, md_title, cache)
     if not main_doi:

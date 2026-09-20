@@ -37,17 +37,6 @@ URL_PATTERN = re.compile(
 )
 
 
-def _build_clippings_index(vault_root: Path) -> dict:
-    index = {}
-    for vault_dir in iter_vault_dirs(vault_root):
-        clips = vault_dir / 'Clippings'
-        if not clips.is_dir():
-            continue
-        for md in clips.rglob('*.md'):
-            index.setdefault(md.stem, md)
-    return index
-
-
 def extract_text(obj):
     stack = [obj]
     while stack:
@@ -147,7 +136,7 @@ def _merge_new_dois(fm, all_dois, md_name):
     new_refs = new_doi_wikilinks(unique_dois.values(), build_existing_dois(fm.get('reference', [])))
     if new_refs:
         fm['reference'] = fm.get('reference', []) + new_refs
-        print(f'已将{len(new_refs)}个唯一DOI添加到 {md_name} 的reference')
+    print(f'已将{len(new_refs)}个唯一DOI添加到 {md_name} 的reference')
 
 
 def _pin_main_doi(fm, main_doi, md_stem):
@@ -198,15 +187,12 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_ca
 
     year = get_issued_year(main_doi, crossref_cache) if main_doi else None
     add_refs = year is None or datetime.now().year - year <= ref_max_age
-    if not add_refs:
-        print(f'超{ref_max_age}年({year})，仅添加主DOI: {md_dst.name}')
-
     if add_refs:
         _merge_new_dois(fm, all_dois, md_dst.name)
-        if enable_api_refs:
-            ref_section = _append_crossref_refs(fm, rest, main_doi, crossref_cache, md_dst.name)
-            if ref_section:
-                rest += ref_section
+        if enable_api_refs and (ref_section := _append_crossref_refs(fm, rest, main_doi, crossref_cache, md_dst.name)):
+            rest += ref_section
+    else:
+        print(f'超{ref_max_age}年({year})，仅添加主DOI: {md_dst.name}')
     if main_doi:
         _pin_main_doi(fm, main_doi, md_dst.stem)
 
@@ -437,7 +423,12 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
 
     pdf_files = sorted({f.absolute() for f in pp.rglob('*.pdf') if '完成' not in f.name})
     filtered = []
-    global_index = _build_clippings_index(OBSIDIAN_ROOT)
+    global_index = {}
+    for vault_dir in iter_vault_dirs(OBSIDIAN_ROOT):
+        clips = vault_dir / 'Clippings'
+        if clips.is_dir():
+            for md in clips.rglob('*.md'):
+                global_index.setdefault(md.stem, md)
     print(f'全库已索引: {len(global_index)} 个MD')
     for pdf_file in pdf_files:
         done_path = pdf_file.parent / f'完成_{pdf_file.name}'

@@ -57,7 +57,7 @@ def main():
     p_md.add_argument('--path', required=True)
     p_md.add_argument('--depth', type=int, default=0, help='分文件夹统计深度(默认0仅vault级)')
 
-    sub.add_parser('crossref', help='Crossref参考文献工具').add_argument('input', nargs='?', default=None, help='输入(可选)')
+    sub.add_parser('crossref', help='Crossref参考文献工具').add_argument('input', nargs='?', default=None)
 
     p_match = sub.add_parser('match', help='匹配PA/PT/FE + Claude同步调谐')
     p_match.add_argument('base_dir')
@@ -82,7 +82,8 @@ def main():
     p_arch.add_argument('-s', '--source', required=True)
     p_arch.add_argument('-t', '--target', required=True)
 
-    sub.add_parser('rename-pdf', help='Rename PDF files by extracted title').add_argument('directory', nargs='?', default='.', help='Directory containing PDF files')
+    sub.add_parser('rename-pdf', help='Rename PDF files by extracted title').add_argument(
+        'directory', nargs='?', default='.', help='Directory containing PDF files')
 
     sub.add_parser('clean-images', help='清理IMAGE中未被任何MD引用的图片')
 
@@ -96,7 +97,7 @@ def main():
     p_unify.add_argument('--force', action='store_true')
 
     p_pmce = sub.add_parser('pmce', help='PMID/DOI/标题抓取PMC全文MD至PENDING')
-    p_pmce.add_argument('input', nargs='?', default=None, help='输入文件路径或直接文本(缺省交互粘贴)')
+    p_pmce.add_argument('input', nargs='?', default=None)
     p_pmce.add_argument('--path', required=True, help='目标Clippings\\PENDING目录')
     p_pmce.add_argument('--no-graph', action='store_true', help='跳过自动引用图谱')
     p_pmce.add_argument('--dry-run', action='store_true')
@@ -118,7 +119,7 @@ def main():
         'markdown': lambda: run_markdown_graph(args.path, args.depth),
         'crossref': lambda: crossref_handle(args.input) if args.input else run_crossref_interactive(),
         'match': lambda: run_match(args.base_dir, args.dry_run, args.threshold,
-                                   args.force, args.verbose, args.reconcile_claude),
+                                    args.force, args.verbose, args.reconcile_claude),
         'trash': lambda: run_trash(args.path),
         'remove-doi': lambda: _cmd_remove_doi(args),
         'cited-by': lambda: run_cited_by_interactive() if args.path == '-' else run_cited_by(args.path, args.max),

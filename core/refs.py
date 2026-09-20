@@ -49,26 +49,20 @@ _STEM_PREFIX_RE = re.compile(r'^\d+_?\s*')
 
 def norm_stems(stem: str) -> set:
     variants = {stem, canonicalize_stem(stem)}
-    variants |= {w for v in tuple(variants) for w in (v.replace(' ', '_'), v.replace('_', ' '))}
+    variants |= {w for v in list(variants) for w in (v.replace(' ', '_'), v.replace('_', ' '))}
     if (stripped := _STEM_PREFIX_RE.sub('', stem)) != stem:
         variants.add(stripped)
-        variants |= {sv for v in tuple(variants) if (sv := _STEM_PREFIX_RE.sub('', v)) != v}
-    for v in tuple(variants):
-        variants.add(v.lower())
-    for v in tuple(variants):
+        variants |= {sv for v in list(variants) if (sv := _STEM_PREFIX_RE.sub('', v)) != v}
+    variants |= {v.lower() for v in variants}
+    for v in list(variants):
         if ' - ' in v:
-            variants.add(v.replace(' - ', ' '))
-    for v in tuple(variants):
-        if ' - ' in v:
+            vb = v.replace(' - ', ' ')
+            variants.add(vb)
             prefix = v.split(' - ')[0]
             if prefix and prefix != v:
-                variants.add(prefix)
-                variants.add(prefix.lower())
-    for v in tuple(variants):
-        stripped = v.rstrip('.')
-        if stripped and stripped != v:
-            variants.add(stripped)
-            variants.add(stripped.lower())
+                variants.update((prefix, prefix.lower()))
+    variants |= {v.rstrip('.') for v in list(variants) if v.endswith('.')}
+    variants |= {v.lower() for v in variants if not v.islower()}
     return variants
 
 

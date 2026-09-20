@@ -125,7 +125,7 @@ def run_reconcile(vault_root: str = r'C:\Vault',
                     fe_info[f'{vname}/{stem[:-8]}'] = (md, vname, stem[:-8])
                     continue
                 force_keep = bool(_CITATION_RE.search(stem))
-                dupe_m = _DUPE_SUFFIX_RE.search(stem)  # not used in decision; detected for visibility
+                dupe_m = _DUPE_SUFFIX_RE.search(stem)
                 is_dupe = bool(dupe_m) and (md.parent / f'{stem[:dupe_m.start()]}.md').exists()
                 target = pa_targets[md]
                 action = resolve_action(target, vname, stem, clip_to_vault, pa_referenced, force_keep)
@@ -162,8 +162,7 @@ def run_reconcile(vault_root: str = r'C:\Vault',
 
         if pa_entry:
             action = pa_entry[2]
-            fe_action[fe_key] = (fe_path, fvname, action if action.startswith('move:')
-                                 else ('keep' if action == 'keep' else 'trash'))
+            fe_action[fe_key] = (fe_path, fvname, action if ':' in action else action)
         else:
             fe_action[fe_key] = (fe_path, fvname, 'trash')
 

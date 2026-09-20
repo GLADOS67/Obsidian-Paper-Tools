@@ -19,19 +19,12 @@ _RE_SECTION_HEADING = re.compile(
 _MAX_DOI_LEN = 80
 
 
-# ── text extraction ──────────────────────────────────────────────
-
-def _extract_pages(pdf_path, x_tolerance=2, y_tolerance=2):
-    with pdfplumber.open(pdf_path) as pdf:
-        return [normalize_unicode_dashes(page.extract_text(x_tolerance=x_tolerance, y_tolerance=y_tolerance) or '')
-                for page in pdf.pages]
-
-
 # ── DOI extraction from pdf ──────────────────────────────────────
 
 def _pdf_pages_task(queue, pdf_path):
-    pages = _extract_pages(pdf_path)
-    queue.put(pages)
+    with pdfplumber.open(pdf_path) as pdf:
+        queue.put([normalize_unicode_dashes(page.extract_text(x_tolerance=2, y_tolerance=2) or '')
+                    for page in pdf.pages])
 
 
 def extract_dois_from_pdf(pdf_path, timeout=60):
@@ -108,10 +101,11 @@ def merge_paragraphs(text):
     lines = text.split('\n')
     result = [lines[0].rstrip()]
     for line in lines[1:]:
-        curr, prev = line.rstrip(), result[-1]
+        curr = line.rstrip()
+        prev = result[-1]
         if not curr:
             result.append('')
-        elif not prev or (prev[-1] in _SENTENCE_END and not prev.endswith('-') and not curr.lstrip()[0].islower()):
+        elif not prev or (prev[-1] in _SENTENCE_END and not prev.endswith('-') and not curr[0].islower()):
             result.append(curr)
         else:
             result[-1] = (prev[:-1] + curr.lstrip()) if prev.endswith('-') else f'{prev} {curr.lstrip()}'
@@ -119,18 +113,16 @@ def merge_paragraphs(text):
 
 
 def post_process_md(text):
-    result = []
-    for line in text.split('\n'):
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
         stripped = line.strip()
         if not stripped.startswith('#') and (
-            _RE_NUMBERED_HEADING.match(stripped)
-            or (len(stripped) < 80 and stripped.isupper() and sum(c.isalpha() for c in stripped) > 3)
-            or _RE_SECTION_HEADING.match(stripped)
+            _RE_NUMBERED_HEADING.match(stripped) or
+            (len(stripped) < 80 and stripped.isupper() and sum(c.isalpha() for c in stripped) > 3) or
+            _RE_SECTION_HEADING.match(stripped)
         ):
-            result.append(f'## {stripped}')
-        else:
-            result.append(line)
-    return '\n'.join(result)
+            lines[i] = f'## {stripped}'
+    return '\n'.join(lines)
 
 
 # ── PDF → Markdown ───────────────────────────────────────────────
@@ -148,8 +140,7 @@ def convert_pdf_to_md(pdf_path):
                     if mt:
                         parts.append(mt)
                 parts.append('')
-        raw = normalize_unicode_dashes('\n'.join(parts))
-        return post_process_md(raw)
+        return post_process_md(normalize_unicode_dashes('\n'.join(parts)))
     except Exception as e:
         print(f'PDF转换失败 {pdf_path}: {e}')
         return ''

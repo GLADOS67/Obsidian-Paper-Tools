@@ -6,7 +6,7 @@ from pathlib import Path
 
 import fitz
 
-from core.doi import SMART_QUOTE_TABLE
+from core.doi import CANONICAL_CHAR_TABLE
 
 JUNK_TITLES = {
     'untitled', 'microsoft word', 'powerpoint', 'slide', 'slides',
@@ -60,11 +60,9 @@ def _is_title_junk(title):
     n_words = len(words)
     if n_words == 1 and title[0].isupper():
         return True
-    if title.isupper():
-        if n_words <= 6 and all(len(w) <= 4 for w in words):
-            return True
-        if sum(1 for w in words if len(w) == 1) >= 3 and len(title) < 40:
-            return True
+    if title.isupper() and (n_words <= 6 and all(len(w) <= 4 for w in words)
+                             or sum(1 for w in words if len(w) == 1) >= 3 and len(title) < 40):
+        return True
     bad = sum(1 for c in title if ord(c) < 32 or ord(c) == 0xFFFD)
     return bad / len(title) > 0.3
 
@@ -169,7 +167,7 @@ def _extract_from_flat_page(spans, page_h):
 
 
 def _sanitize_filename(title):
-    title = title.translate(SMART_QUOTE_TABLE).replace('\n', ' ').replace('\r', ' ')
+    title = title.translate(CANONICAL_CHAR_TABLE).replace('\n', ' ').replace('\r', ' ')
     title = title.translate(_FILENAME_STRIP_TABLE)
     title = ' '.join(title.split())
     if len(title) > 250:

@@ -144,14 +144,14 @@ def _fetch_metadata(items):
 
 
 def _match_one(results, kind, val):
+    lv = val.lower()
     if kind == 'pmid':
         return next((r for r in results if r.get('id') == val), None)
     if kind == 'doi':
-        lv = val.lower()
         return next((r for r in results if r.get('doi', '').lower() == lv), None)
     best, best_score = None, 0.0
     for r in results:
-        score = SequenceMatcher(None, (r.get('title') or '').lower(), val.lower()).ratio()
+        score = SequenceMatcher(None, (r.get('title') or '').lower(), lv).ratio()
         if score > best_score:
             best, best_score = r, score
     return best if best_score >= _TITLE_SIM else None
@@ -164,26 +164,22 @@ def _get_figure_urls(pmcid):
     if pmcid in FIG_URL_CACHE:
         return FIG_URL_CACHE[pmcid]
     try:
-        r = _http.get(f'https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?format=json',
-                      timeout=30)
+        r = _http.get(f'https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?format=json', timeout=30)
         if r.status_code != 200:
             raise ConnectionError(r.status_code)
     except Exception:
         try:
-            r = curl_requests.get(
-                f'https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?format=json',
-                timeout=30, impersonate='chrome120')
+            r = curl_requests.get(f'https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?format=json',
+                                  timeout=30, impersonate='chrome120')
             if r.status_code != 200:
-                return {}
+                raise ConnectionError(r.status_code)
         except Exception:
+            FIG_URL_CACHE[pmcid] = {}
             return {}
-    mapping = {}
     pmcid_num = pmcid.replace('PMC', '', 1)
-    for m in re.finditer(r'blobs/[A-Za-z0-9]+/' + re.escape(pmcid_num)
-                          + r'/[A-Za-z0-9]+/([A-Za-z0-9_.\-]+)', r.text):
-        fname = m.group(1)
-        if fname not in mapping:
-            mapping[fname] = f'https://cdn.ncbi.nlm.nih.gov/pmc/{m.group(0)}'
+    mapping = {m.group(1): f'https://cdn.ncbi.nlm.nih.gov/pmc/{m.group(0)}'
+               for m in re.finditer(r'blobs/[A-Za-z0-9]+/' + re.escape(pmcid_num)
+                                    + r'/[A-Za-z0-9]+/([A-Za-z0-9_.\-]+)', r.text)}
     FIG_URL_CACHE[pmcid] = mapping
     return mapping
 
@@ -338,12 +334,12 @@ def _list_md(lst):
 
 
 def _ref_doi(ref):
-    doi = next((p.text.strip() for p in ref.iter()
-                if _local(p.tag) == 'pub-id' and p.get('pub-id-type') == 'doi' and p.text), None)
-    if doi is None:
-        doi = next((e.get(XLINK) for e in ref.iter()
-                    if _local(e.tag) == 'ext-link' and e.get('ext-link-type') == 'doi'
-                    and e.get(XLINK)), None)
+    for p in ref.iter():
+        if _local(p.tag) == 'pub-id' and p.get('pub-id-type') == 'doi' and p.text:
+            return p.text.strip()
+    doi = next((e.get(XLINK) for e in ref.iter()
+               if _local(e.tag) == 'ext-link' and e.get('ext-link-type') == 'doi'
+               and e.get(XLINK)), None)
     return doi
 
 
@@ -378,19 +374,14 @@ def _compose_md(meta, xml_text):
              f'作者: {meta.get("authorString", "")}',
              f'DOI: {meta.get("doi", "")}',
              f'发表: {year}']
-    abstract = None
-    if front is not None and (am := _first(front, 'article-meta')) is not None:
-        abstract = _first(am, 'abstract')
-    if abstract is not None:
+    if front is not None and (am := _first(front, 'article-meta')) is not None and (abstract := _first(am, 'abstract')) is not None:
         lines += ['', '## Abstract']
         ps = [_para(p) for p in _iter(abstract, 'p')]
         lines.extend(ps or [_para(abstract)])
-    if body is not None:
-        lines.append('')
-        _blocks_md(body, 2, meta['pmcid'], lines)
-    if floats is not None:
-        lines.append('')
-        _blocks_md(floats, 2, meta['pmcid'], lines)
+    for section in (body, floats):
+        if section is not None:
+            lines.append('')
+            _blocks_md(section, 2, meta['pmcid'], lines)
     refs = _refs_md(root)
     if refs:
         lines.append('')
