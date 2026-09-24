@@ -2,7 +2,6 @@ import json
 import os
 import re
 import shutil
-import threading
 import time
 import uuid
 import zipfile
@@ -13,14 +12,16 @@ from pathlib import Path
 
 from requests.exceptions import JSONDecodeError
 
-from core.crossref_api import (fetch_references, get_doi_from_citation,
-                               get_cited_by_pubmed, get_issued_year,
-                               load_cache, save_cache)
-from core.doi import (PATTERN_DOI, find_plausible_dois, get_main_doi,
+from core.crossref_api import (fetch_references, get_cited_by_pubmed,
+                               get_doi_from_citation, load_cite_by_cache,
+                               load_doi_title_cache, lookup_doi_by_title,
+                               put_doi_title, save_cite_by_cache,
+                               save_doi_title_cache)
+from core.doi import (find_plausible_dois, get_main_doi,
                        normalize_unicode_dashes, process_doi, repair_doi_text)
 from core.frontmatter import (apply_cited_by, build_doi_set, cited_by_fresh,
                                dump_frontmatter, parse_frontmatter_str)
-from core.http import make_session
+from core.http import get_session
 from core.markdown_utils import clean_markdown_body
 from core.refs import build_existing_dois, canonicalize_stem, new_doi_wikilinks, process_existing_references
 from core import try_copy, iter_vault_dirs
@@ -28,7 +29,7 @@ from core.pdf_extractor import convert_pdf_to_md, extract_dois_from_pdf
 from config import (DEFAULT_IMAGE_PATH, DEFAULT_MD_PATH, DEFAULT_PDF_PATH,
                     DEFAULT_ZIP_PATH, MINERU_TOKEN, OBSIDIAN_ROOT)
 
-_http = make_session()
+_http = get_session()
 
 
 URL_PATTERN = re.compile(
@@ -73,12 +74,9 @@ def apply_upload_urls(token, files_info, url):
             'upload_urls': result['data']['file_urls']}
 
 
-def _append_crossref_refs(fm, rest, main_doi, crossref_cache, md_name):
-    """拉取Crossref参考文献合并进 fm['reference']；正文中无参考文献段时返回待追加的段落。"""
-    if not main_doi:
-        return None
-    references = fetch_references(main_doi, crossref_cache)
-    if not references:
+def _append_crossref_refs(fm, rest, main_doi, references, md_name):
+    """合并Crossref参考文献进 fm['reference']；正文中无参考文献段时返回待追加的段落。"""
+    if not main_doi or not references:
         return None
     ref_dois = new_doi_wikilinks((r['doi'] for r in references if r['doi']),
                                  build_existing_dois(fm.get('reference', [])))
@@ -148,9 +146,9 @@ def _pin_main_doi(fm, main_doi, md_stem):
     fm['reference'] = refs
 
 
-def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_cache,
-                        enable_cited_by=False, cited_by_max=10, images_dir=None,
-                        clippings_doi_set=None, ref_max_age=15):
+def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, doi_title_cache,
+                        cite_by_cache, enable_cited_by=False, cited_by_max=10,
+                        images_dir=None, clippings_doi_set=None, ref_max_age=15):
     if not md_dst.exists():
         return False
     try:
@@ -169,28 +167,46 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, crossref_ca
     fm, rest = parse_frontmatter_str(content)
     main_doi = get_main_doi(fm, content, all_dois)
 
+    if main_doi is None:
+        main_doi = lookup_doi_by_title(md_dst.stem, doi_title_cache)
+        if main_doi:
+            print(f'PDF文件名→DOI: {main_doi}')
     if main_doi is None and enable_api_refs and not all_dois:
-        result = get_doi_from_citation(fm.get('title', md_dst.stem), crossref_cache)
+        result = get_doi_from_citation(fm.get('title', md_dst.stem), doi_title_cache)
         main_doi = process_doi(result[0])[0] if result else None
         print(f'Crossref标题回退{"确认主DOI" if result else "无结果"}: {fm.get("title", md_dst.stem)}')
+    if main_doi:
+        fm['doi'] = main_doi
+        put_doi_title(doi_title_cache, main_doi, fm.get('title', '') or md_dst.stem)
 
     if enable_cited_by and main_doi:
         if clippings_doi_set is None:
             clippings_doi_set = build_doi_set(md_dst.parent)
         if not cited_by_fresh(fm):
-            _, citing_dois = get_cited_by_pubmed(main_doi, crossref_cache, clippings_doi_set, cited_by_max)
+            _, citing_dois = get_cited_by_pubmed(main_doi, cite_by_cache, doi_title_cache,
+                                                 clippings_doi_set, cited_by_max)
             apply_cited_by(fm, citing_dois)
 
     existing_refs = fm.get('reference', [])
     if existing_refs:
         fm['reference'] = process_existing_references(existing_refs)
 
-    year = get_issued_year(main_doi, crossref_cache) if main_doi else None
+    year = fm.get('published')
+    if not isinstance(year, int):
+        year = None
+    refs = None
+    if main_doi and year is None:
+        refs, year = fetch_references(main_doi, doi_title_cache)
+        if year:
+            fm['published'] = year
     add_refs = year is None or datetime.now().year - year <= ref_max_age
     if add_refs:
         _merge_new_dois(fm, all_dois, md_dst.name)
-        if enable_api_refs and (ref_section := _append_crossref_refs(fm, rest, main_doi, crossref_cache, md_dst.name)):
-            rest += ref_section
+        if enable_api_refs:
+            if refs is None:
+                refs, _ = fetch_references(main_doi, doi_title_cache)
+            if ref_section := _append_crossref_refs(fm, rest, main_doi, refs, md_dst.name):
+                rest += ref_section
     else:
         print(f'超{ref_max_age}年({year})，仅添加主DOI: {md_dst.name}')
     if main_doi:
@@ -293,10 +309,9 @@ def _mark_pdf_done(pdf_file_path: Path, trash_dir: Path = None):
 
 
 def _run_local_batch(pdf_files, path_md0, enable_api_refs,
-                     crossref_cache, enable_cited_by, cited_by_max,
+                     doi_title_cache, cite_by_cache, enable_cited_by, cited_by_max,
                      images_dir, clippings_doi_set, ref_max_age=15):
     pm = Path(path_md0)
-    cache_lock = threading.Lock()
 
     def _process_one(pdf_path, idx):
         print(f'[{idx}/{len(pdf_files)}] {pdf_path.name}')
@@ -311,12 +326,11 @@ def _run_local_batch(pdf_files, path_md0, enable_api_refs,
         except Exception as e:
             print(f'  写入失败: {e}')
             return None
-        with cache_lock:
-            success = _process_md_content(
-                md_dst, None, pdf_path, enable_api_refs,
-                crossref_cache, enable_cited_by, cited_by_max,
-                images_dir, clippings_doi_set, ref_max_age,
-            )
+        success = _process_md_content(
+            md_dst, None, pdf_path, enable_api_refs,
+            doi_title_cache, cite_by_cache, enable_cited_by, cited_by_max,
+            images_dir, clippings_doi_set, ref_max_age,
+        )
         if success:
             _mark_pdf_done(pdf_path)
         return md_dst.name
@@ -330,9 +344,9 @@ def _run_local_batch(pdf_files, path_md0, enable_api_refs,
 
 
 def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
-                               enable_api_refs, crossref_cache, enable_cited_by=False,
-                               cited_by_max=10, batch_files=None, images_output=None,
-                               ref_max_age=15):
+                               enable_api_refs, doi_title_cache, cite_by_cache,
+                               enable_cited_by=False, cited_by_max=10, batch_files=None,
+                               images_output=None, ref_max_age=15):
     name_to_path = {Path(f).name: Path(f) for f in (batch_files or [])}
     images_output = images_output or DEFAULT_IMAGE_PATH
     images_output.mkdir(exist_ok=True)
@@ -377,8 +391,9 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
             if md_dst:
                 pdf_file_path = name_to_path.get(file_name, path_pdf / file_name)
                 if _process_md_content(md_dst, json_src, pdf_file_path, enable_api_refs,
-                                       crossref_cache, enable_cited_by, cited_by_max,
-                                       images_output, clippings_doi_set, ref_max_age):
+                                       doi_title_cache, cite_by_cache, enable_cited_by,
+                                       cited_by_max, images_output, clippings_doi_set,
+                                       ref_max_age):
                     _mark_pdf_done(pdf_file_path)
         except Exception as e:
             print(f'处理失败: {e}')
@@ -410,7 +425,8 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
     path_zip = path_zip or DEFAULT_ZIP_PATH
     path_md0 = path_md0 or DEFAULT_MD_PATH
 
-    crossref_cache = load_cache()
+    doi_title_cache = load_doi_title_cache()
+    cite_by_cache = load_cite_by_cache()
     pp = Path(path_pdf)
     pm = Path(path_md0)
     for p in (pp, pm):
@@ -459,9 +475,10 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
     if local:
         clippings_doi_set = build_doi_set(pm) if enable_cited_by else None
         _run_local_batch(pdf_files, path_md0, enable_api_refs,
-                        crossref_cache, enable_cited_by, cited_by_max,
+                        doi_title_cache, cite_by_cache, enable_cited_by, cited_by_max,
                         images_dir, clippings_doi_set, ref_max_age)
-        save_cache(crossref_cache)
+        save_doi_title_cache(doi_title_cache)
+        save_cite_by_cache(cite_by_cache)
         print(f'\n全部完成！共处理 {len(pdf_files)} 个PDF，输出到 {pm}')
         return
 
@@ -507,7 +524,8 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
     print('\n开始下载并处理结果...')
     for bid in batch_ids:
         download_and_process_batch(bid, pz, pm, token, pp, enable_api_refs,
-                                   crossref_cache, enable_cited_by, cited_by_max,
-                                   batch_file_map.get(bid, []), images_output=images_dir,
-                                   ref_max_age=ref_max_age)
-    save_cache(crossref_cache)
+                                   doi_title_cache, cite_by_cache, enable_cited_by,
+                                   cited_by_max, batch_file_map.get(bid, []),
+                                   images_output=images_dir, ref_max_age=ref_max_age)
+    save_doi_title_cache(doi_title_cache)
+    save_cite_by_cache(cite_by_cache)

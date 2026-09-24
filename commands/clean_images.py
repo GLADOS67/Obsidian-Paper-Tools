@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from config import DEFAULT_IMAGE_PATH, OBSIDIAN_ROOT
+from core.cache import read_text_safe
 
 PATTERN_IMG = re.compile(r'!\[[^\]]*\]\(([^)]+)\)')
 
@@ -14,26 +15,25 @@ def image_names(images_dir: Path) -> set:
     return {f.name for f in images_dir.iterdir() if f.is_file()}
 
 
-def _scan_one(md_path: Path) -> set:
-    try:
-        text = md_path.read_text(encoding='utf-8')
-    except Exception:
-        return set()
-    names = set()
-    for m in PATTERN_IMG.finditer(text):
-        url = m.group(1)
-        if url.startswith(('http://', 'https://')):
-            continue
-        normalized = url.replace('\\', '/')
-        if 'Vault/IMAGE' in normalized or '/images/' in normalized or normalized.startswith('images/'):
-            names.add(os.path.basename(normalized))
-    return names
-
-
 def scan_referenced_images(md_files, show_progress: bool = False) -> set:
     """并行扫描 .md 文件，返回被引用的本地图片文件名集合。"""
     md_files = list(md_files)
     referenced = set()
+
+    def _scan_one(md_path: Path) -> set:
+        text = read_text_safe(md_path)
+        if not text:
+            return set()
+        names = set()
+        for m in PATTERN_IMG.finditer(text):
+            url = m.group(1)
+            if url.startswith(('http://', 'https://')):
+                continue
+            normalized = url.replace('\\', '/')
+            if 'Vault/IMAGE' in normalized or '/images/' in normalized or normalized.startswith('images/'):
+                names.add(os.path.basename(normalized))
+        return names
+
     with ThreadPoolExecutor() as ex:
         for i, names in enumerate(ex.map(_scan_one, md_files), 1):
             referenced.update(names)

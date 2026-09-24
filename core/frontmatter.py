@@ -1,7 +1,6 @@
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from itertools import repeat
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -11,10 +10,10 @@ try:
 except ImportError:
     from yaml import SafeLoader as _YamlLoader, SafeDumper as _YamlDumper
 
+from core.cache import read_text_auto
 from core.doi import PATTERN_DOI, extract_doi_from_frontmatter, make_wikilink, process_doi
 
 PATTERN_FRONTMATTER = re.compile(r'^---\r?\n(.*?)\r?\n---', re.DOTALL | re.MULTILINE)
-_ENCODINGS = ('utf-8', 'gbk')
 
 
 def parse_frontmatter_str(content: str) -> Tuple[Dict, str]:
@@ -30,17 +29,18 @@ def parse_frontmatter_str(content: str) -> Tuple[Dict, str]:
 
 
 def parse_frontmatter_file(path: Path) -> Tuple[Optional[Dict], str]:
-    data = path.read_bytes()
-    for enc in _ENCODINGS:
-        try:
-            raw = data.decode(enc).lstrip('\ufeff')
-            break
-        except UnicodeDecodeError:
-            continue
-    else:
-        raw = data.decode('utf-8', errors='replace')
+    raw = read_text_auto(path)
     fm, rest = parse_frontmatter_str(raw)
     return fm or None, rest
+
+
+def parse_frontmatter_batch(paths: List[Path], fm_only: bool = False):
+    """并行解析多个文件的 frontmatter（保持输入顺序）；fm_only 时返回 [fm or None]。"""
+    with ThreadPoolExecutor() as ex:
+        parsed = list(ex.map(parse_frontmatter_file, paths))
+    if fm_only:
+        return [fm for fm, _ in parsed]
+    return parsed
 
 
 def dump_frontmatter(fm: Dict, body: str) -> str:
@@ -70,29 +70,28 @@ def apply_cited_by(fm: Dict, citing_dois: list) -> None:
         fm['cited_by'] = [make_wikilink(process_doi(d)[0]) for d in citing_dois]
 
 
-def _collect_file_dois(md_file: Path, include_refs: bool) -> List[str]:
-    try:
-        fm = parse_frontmatter_file(md_file)[0] or {}
-    except Exception:
-        return []
-    dois = []
-    if main := extract_doi_from_frontmatter(fm):
-        dois.append(main.lower())
-    if include_refs and fm:
-        for key in ('reference', 'cited_by'):
-            for ref in fm.get(key, []):
-                if isinstance(ref, str) and (m := PATTERN_DOI.search(ref)):
-                    dois.append(m.group(0).lower())
-    return dois
-
-
 def build_doi_set(md_dir: Path, include_refs: bool = False) -> set:
-    """Collect all DOIs from frontmatter of .md files in directory tree.
+    """并行收集目录树下所有 MD 的 frontmatter DOI（去重、小写）。
 
-    When include_refs is True, also gather DOIs from 'reference' and 'cited_by' wikilinks.
+    include_refs 为 True 时同时收集 reference / cited_by wikilink 中的 DOI。
     """
+    def _collect(md_file: Path) -> set:
+        try:
+            fm = parse_frontmatter_file(md_file)[0] or {}
+        except Exception:
+            return set()
+        dois = set()
+        if main := extract_doi_from_frontmatter(fm):
+            dois.add(main.lower())
+        if include_refs and fm:
+            for key in ('reference', 'cited_by'):
+                for ref in fm.get(key, []):
+                    if isinstance(ref, str) and (m := PATTERN_DOI.search(ref)):
+                        dois.add(m.group(0).lower())
+        return dois
+
     existing = set()
     with ThreadPoolExecutor() as ex:
-        for dois in ex.map(_collect_file_dois, md_dir.rglob('*.md'), repeat(include_refs)):
+        for dois in ex.map(_collect, md_dir.rglob('*.md')):
             existing.update(dois)
     return existing

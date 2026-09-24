@@ -78,6 +78,7 @@ PATTERN_DOUBLE_DOI = re.compile(r'10\.\d{4,9}/.*10\.\d{4,9}/', re.IGNORECASE)
 PATTERN_EMBEDDED_DOI_LABEL = re.compile(r'\.doi[:\d]', re.IGNORECASE)
 PATTERN_STAT_OR_CI = re.compile(r'\d+\.\d+\(\d+\.\d+[-–]\d+\.\d+\)')
 PATTERN_REF_TAIL = re.compile(r'\d{1,3}\.[A-Z][a-z]{2,}')
+PATTERN_DOI_BAD_TAIL = re.compile(r'[-_:;]$')  # 【勿改】截断DOI以符号结尾（如 10.1097/00007632-）
 MAX_DOI_RAW_LEN = 200
 
 
@@ -91,6 +92,7 @@ def is_plausible_doi(doi: str) -> bool:
         or PATTERN_EMBEDDED_DOI_LABEL.search(doi)
         or PATTERN_STAT_OR_CI.search(doi)
         or PATTERN_REF_TAIL.search(doi)
+        or PATTERN_DOI_BAD_TAIL.search(doi)
     )
 
 

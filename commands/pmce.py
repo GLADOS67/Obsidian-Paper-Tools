@@ -9,7 +9,6 @@
 """
 
 import html
-import random
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -19,15 +18,18 @@ from pathlib import Path
 
 from curl_cffi import requests as curl_requests
 
+from core.cache import read_text_auto
+from core.crossref_api import (load_doi_title_cache, put_doi_title,
+                               save_doi_title_cache)
 from core.doi import (PATTERN_DOI, PATTERN_FS_INVALID, find_plausible_dois,
                       normalize_unicode_dashes, process_doi)
-from core.http import make_session
+from core.http import get_session, polite_sleep
 from commands.markdown_graph import run_markdown_graph
 
 EUPMC_BASE = 'https://www.ebi.ac.uk/europepmc/webservices/rest'
 XLINK = '{http://www.w3.org/1999/xlink}href'
 
-_http = make_session()
+_http = get_session()
 
 PATTERN_PMID_LABELED = re.compile(r'PMID:?\s*(\d{6,9})', re.IGNORECASE)
 PATTERN_PMC_ID = re.compile(r'PMC\d+', re.IGNORECASE)
@@ -47,11 +49,7 @@ def _read_input(input_arg):
         try:
             p = Path(input_arg.strip('"'))
             if p.is_file():
-                for enc in ('utf-8', 'gbk'):
-                    try:
-                        return p.read_text(encoding=enc)
-                    except UnicodeDecodeError:
-                        continue
+                return read_text_auto(p)
         except (OSError, ValueError):
             pass
         return input_arg
@@ -139,7 +137,7 @@ def _fetch_metadata(items):
             continue
         results.extend(resp.json().get('resultList', {}).get('result', []))
         if i + _CHUNK < len(items):
-            time.sleep(random.uniform(1.0, 2.0))
+            polite_sleep()
     return results
 
 
@@ -409,6 +407,7 @@ def run_pmce(input_arg, path, no_graph=False, dry_run=False):
     pending = Path(path)
     pending.mkdir(parents=True, exist_ok=True)
     text = _read_input(input_arg)
+    doi_title_cache = load_doi_title_cache()
     items = _extract_identifiers(text)
     counts = Counter(k for k, _ in items)
     print(f'识别标识 {len(items)} 个（DOI {counts["doi"]} / PMID {counts["pmid"]} / 标题 {counts["title"]}）')
@@ -426,11 +425,14 @@ def run_pmce(input_arg, path, no_graph=False, dry_run=False):
         if meta.get('id') in seen_ids:
             continue
         seen_ids.add(meta.get('id'))
+        put_doi_title(doi_title_cache, meta.get('doi') or '',
+                      html.unescape(meta.get('title') or ''))
         if meta.get('pmcid') and meta.get('isOpenAccess') == 'Y':
             jobs.append(meta)
         else:
             non_oa.append(meta)
     print(f'OA可抓 {len(jobs)} 篇 / 非OA {len(non_oa)} 篇')
+    save_doi_title_cache(doi_title_cache)
     if dry_run:
         _print_non_oa(non_oa)
         return
@@ -457,7 +459,7 @@ def run_pmce(input_arg, path, no_graph=False, dry_run=False):
             print(f'[{i}/{len(jobs)}] {target.name}')
         except Exception as e:
             print(f'解析失败 {meta.get("id")}: {e}')
-        time.sleep(random.uniform(2.0, 4.0))
+        polite_sleep(2.0, 4.0)
 
     print(f'\n写入 {len(written)} 个MD → {pending}')
     if written and not no_graph:

@@ -4,15 +4,16 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from core.crossref_api import (fetch_references, get_doi_from_citation,
-                                load_cache, save_cache)
+                                load_doi_title_cache, put_doi_title,
+                                save_doi_title_cache)
 from core.doi import (PATTERN_DOI, extract_doi_from_frontmatter,
                        get_main_doi, process_doi, repair_doi_text)
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
+from core.markdown_utils import H1_RE
 from core.obsidian_path import resolve_input_path, SM_QUICK
 from core.pdf_extractor import extract_first_doi_from_pdf
 from core.refs import new_doi_wikilinks, process_existing_references, split_wikilink
 
-RE_MD_HEADING = re.compile(r'^#\s+(.+)', re.MULTILINE)
 RE_REF_ENTRY = re.compile(r'^\s*(?:\[(\d+)\]|(\d+)\.)\s+(.*)$', re.MULTILINE)
 
 _USAGE_MSG = (
@@ -47,6 +48,8 @@ def _build_ref_list(md_stem: str, main_doi: Optional[str], references: List[Dict
 def update_md_references(md_path: Path, references: List[Dict], main_doi: Optional[str] = None) -> None:
     content = md_path.read_text(encoding='utf-8')
     fm_data, body = parse_frontmatter_str(content)
+    if main_doi:
+        fm_data['doi'] = main_doi
     fm_data['reference'] = _build_ref_list(
         md_path.stem, main_doi, references,
         existing_refs=fm_data.get('reference', []),
@@ -66,7 +69,7 @@ def _get_main_doi(pdf_path: Optional[Path], content: Optional[str], fm: Optional
 
 def _get_md_title(content: Optional[str], fm_data: Optional[dict], fallback_stem: str) -> str:
     if content:
-        stripped = [h.strip() for h in RE_MD_HEADING.findall(content)]
+        stripped = [h.strip() for h in H1_RE.findall(content)]
         if stripped:
             return next((h for h in stripped if not _NON_TITLE_RE.match(h)), stripped[0])
     if fm_data and fm_data.get('title'):
@@ -129,7 +132,8 @@ def process_file(file_path: Path, cache: dict) -> None:
             print('未能匹配论文，操作终止。')
         return
     print(f'目标DOI: {main_doi}')
-    refs = fetch_references(main_doi, cache)
+    put_doi_title(cache, main_doi, _get_md_title(content, fm_data, file_path.stem))
+    refs, _ = fetch_references(main_doi, cache)
     if suffix == '.md':
         update_md_references(file_path, refs, main_doi)
     else:
@@ -140,7 +144,7 @@ def process_local_references_in_md(md_path: Path, override_main_doi: Optional[st
     if not md_path.exists():
         print(f'文件不存在: {md_path}')
         return
-    cache = cache or load_cache()
+    cache = cache or load_doi_title_cache()
     content = md_path.read_text(encoding='utf-8')
     fm_data, _ = parse_frontmatter_str(content)
     main_doi = override_main_doi or _get_main_doi(None, content, fm_data)
@@ -189,7 +193,7 @@ def _handle_doi_import_mode(main_doi: str, cache: dict) -> None:
         print(f'无效的DOI格式: {main_doi}')
         return
     print(f'检测到DOI导入模式，正在拉取 {main_doi} 的参考文献...')
-    refs = fetch_references(main_doi, cache)
+    refs, _ = fetch_references(main_doi, cache)
     if not refs:
         print('未能拉取到参考文献，操作终止。')
         return
@@ -222,8 +226,10 @@ def _handle_takeover_mode(file_path: Path, cache: dict) -> None:
         print('标题搜索失败，无法确定DOI')
         return
     print(f'标题→DOI: {main_doi}')
-    refs = fetch_references(main_doi, cache)
+    put_doi_title(cache, main_doi, title)
+    refs, _ = fetch_references(main_doi, cache)
     if suffix == '.md':
+        fm_data['doi'] = main_doi
         fm_data['reference'] = _build_ref_list(file_path.stem, main_doi, refs)
         file_path.write_text(dump_frontmatter(fm_data, body), encoding='utf-8')
         print(f'￥ 接管完成: 清空旧引用，写入 {len(fm_data["reference"])} 条引用（标题DOI置顶）')
@@ -233,7 +239,7 @@ def handle_input(input_str: str, cache: dict = None) -> bool:
     input_str = input_str.strip()
     if not input_str:
         return False
-    cache = cache or load_cache()
+    cache = cache or load_doi_title_cache()
     takeover = input_str.startswith('￥')
     if takeover:
         input_str = input_str[1:].strip()
@@ -260,17 +266,17 @@ def handle_input(input_str: str, cache: dict = None) -> bool:
 def run_crossref_interactive() -> None:
     print('=== Obsidian 学术文献管理工具 ===')
     print('循环交互模式（支持 ￥路径 / local:路径 [doi:目标DOI] / 文件路径 / doi:DOI号）')
-    cache = load_cache()
+    cache = load_doi_title_cache()
     while True:
         try:
             user_input = input('请输入内容: ').strip()
             if user_input:
                 handle_input(user_input, cache)
-                save_cache(cache)
+                save_doi_title_cache(cache)
                 print('\n--- 处理完成，可继续输入 ---\n')
         except KeyboardInterrupt:
             print('\n退出程序')
-            save_cache(cache)
+            save_doi_title_cache(cache)
             break
         except Exception as e:
             import traceback

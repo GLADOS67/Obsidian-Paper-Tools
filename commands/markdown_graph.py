@@ -3,11 +3,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from core.cache import read_text_auto
+from core.crossref_api import (load_cite_by_cache, load_doi_title_cache,
+                               lookup_doi_by_title, put_doi_title,
+                               save_cite_by_cache, save_doi_title_cache)
 from core.doi import (PATTERN_DOI, PATTERN_SAFE_DOI, find_plausible_dois,
-                       is_plausible_doi, normalize_unicode_dashes, process_doi,
-                       repair_doi_text)
-from core.frontmatter import dump_frontmatter, parse_frontmatter_str
-from core.markdown_utils import clean_markdown_body
+                      is_plausible_doi, normalize_unicode_dashes, process_doi,
+                      repair_doi_text)
+from core.frontmatter import (dump_frontmatter, parse_frontmatter_batch,
+                              parse_frontmatter_str)
+from core.markdown_utils import H1_RE, clean_markdown_body
 from core.refs import split_wikilink, wikilink_doi
 
 DoiEntry = List  # [[ref_spec, ref_stems_dict], [cb_spec, cb_stems_dict]]
@@ -87,7 +92,8 @@ def _resolve_cited_by(cited: List, unique_map: Dict[str, DoiEntry]) -> List[str]
     return _rebuild_reference_list(parsed_items, unique_map, is_existing=False)[0]
 
 
-def _resolve_self_doi(file_stem: str, refs: List[str]) -> Optional[str]:
+def _resolve_self_doi(file_stem: str, refs: List[str],
+                      doi_title_cache=None) -> Optional[str]:
     if not refs:
         return None
     for ref in refs:
@@ -98,13 +104,17 @@ def _resolve_self_doi(file_stem: str, refs: List[str]) -> Optional[str]:
     inner = first[2:-2] if first.startswith('[[') and first.endswith(']]') else first
     doi_part = inner.partition('|')[2] or inner
     m = PATTERN_DOI.search(doi_part)
-    return process_doi(m.group(0))[0] if m else None
+    if m:
+        return process_doi(m.group(0))[0]
+    if doi_title_cache and (doi := lookup_doi_by_title(file_stem, doi_title_cache)):
+        return process_doi(doi)[0]
+    return None
 
 
 def _process_one_file(file: Path, unique_map: Dict[str, DoiEntry],
                       cited_by_map: Dict[str, Tuple[str, List[str]]], lock: threading.Lock):
     try:
-        content = normalize_unicode_dashes(file.read_text(encoding='utf-8'))
+        content = normalize_unicode_dashes(read_text_auto(file))
     except Exception as e:
         print(f'  警告：读取文件 {file.name} 失败，跳过 → {str(e)}')
         return None
@@ -148,15 +158,6 @@ def _process_one_file(file: Path, unique_map: Dict[str, DoiEntry],
     return (file, fm, rest)
 
 
-def _parse_fm_or_none(f: Path) -> Optional[Dict]:
-    try:
-        content = normalize_unicode_dashes(f.read_text(encoding='utf-8'))
-    except Exception:
-        return None
-    fm, _ = parse_frontmatter_str(content)
-    return fm if isinstance(fm, dict) else None
-
-
 def _build_maps_from_fms(md_files, fms, unique_map, cited_by_map):
     for f, fm in zip(md_files, fms):
         if fm is None:
@@ -183,8 +184,7 @@ def _build_maps_from_fms(md_files, fms, unique_map, cited_by_map):
 def _collect_stats_maps(md_files: List[Path]) -> Tuple[Dict[str, DoiEntry], Dict[str, Tuple[str, List[str]]]]:
     unique_map: Dict[str, DoiEntry] = {}
     cited_by_map: Dict[str, Tuple[str, List[str]]] = {}
-    with ThreadPoolExecutor() as ex:
-        fms = list(ex.map(_parse_fm_or_none, md_files))
+    fms = parse_frontmatter_batch(md_files, fm_only=True)
     _build_maps_from_fms(md_files, fms, unique_map, cited_by_map)
     return unique_map, cited_by_map
 
@@ -208,19 +208,13 @@ def _print_top_orphans(unique_map: Dict[str, DoiEntry],
         print('未找到符合条件的目前不存在的外部 cited_by DOI')
 
 
-def _print_folder_stats(folder: Path) -> None:
-    md_files = sorted(folder.rglob('*.md'))
-    if not md_files:
-        return
-    unique_map, cited_by_map = _collect_stats_maps(md_files)
-    print(f'\n📁 {folder.name}')
-    _print_top_orphans(unique_map, cited_by_map)
-
-
 def run_markdown_graph(directory: str, depth: int = 0) -> None:
     target = Path(directory)
     md_files = sorted(target.rglob('*.md'))
     print(f'找到 {len(md_files)} 个MD文件，开始处理...\n')
+
+    doi_title_cache = load_doi_title_cache()
+    cite_by_cache = load_cite_by_cache()
 
     unique_map: Dict[str, DoiEntry] = {}
     cited_by_map: Dict[str, Tuple[str, List[str]]] = {}
@@ -242,18 +236,37 @@ def run_markdown_graph(directory: str, depth: int = 0) -> None:
         fm['reference'] = refs
         if fm.get('cited_by'):
             fm['cited_by'] = _resolve_cited_by(fm['cited_by'], unique_map)
-        self_doi = _resolve_self_doi(file.stem, refs)
+        self_doi = _resolve_self_doi(file.stem, refs, doi_title_cache)
         key = self_doi.lower() if self_doi else None
         citing_stems = list(unique_map[key][0][1]) if (key and key in unique_map) else []
         citing_stems = [s for s in citing_stems if s != file.stem]
         fm['被引'] = [f'[[{s}]]' for s in citing_stems]
         fm['tags'] = ['正向' if (len(citing_stems) - fm.get('特殊引用数', 0)) > 0 else '负向']
         fm.pop('引用情况', None)
+        if self_doi and is_plausible_doi(self_doi):
+            title = fm.get('title')
+            if isinstance(title, list):
+                title = ' '.join(str(t) for t in title)
+            if not (isinstance(title, str) and title.strip()):
+                m = H1_RE.search(rest)
+                title = m.group(1).strip() if m else None
+            if title:
+                put_doi_title(doi_title_cache, self_doi, title)
+            for ref in refs:
+                if ref_doi := wikilink_doi(ref):
+                    if ref_doi.lower() == key or not is_plausible_doi(ref_doi):
+                        continue
+                    citing = cite_by_cache.setdefault(ref_doi, [])
+                    if self_doi not in citing:
+                        citing.append(self_doi)
         try:
             file.write_text(dump_frontmatter(fm, rest), encoding='utf-8')
             print(f'  ✅ {file.name} 更新完成：被引={len(citing_stems)}篇，标签={fm["tags"][0]}')
         except Exception as e:
             print(f'  ❌ {file.name} 保存失败 → {str(e)}')
+
+    save_doi_title_cache(doi_title_cache)
+    save_cite_by_cache(cite_by_cache)
 
     if depth > 0:
         tiers: Dict[int, List[Path]] = {}
@@ -262,7 +275,12 @@ def run_markdown_graph(directory: str, depth: int = 0) -> None:
                 tiers.setdefault(d, []).append(p)
         for d in range(1, depth + 1):
             for folder in sorted(tiers.get(d, [])):
-                _print_folder_stats(folder)
+                md_files = sorted(folder.rglob('*.md'))
+                if not md_files:
+                    continue
+                unique_map, cited_by_map = _collect_stats_maps(md_files)
+                print(f'\n📁 {folder.name}')
+                _print_top_orphans(unique_map, cited_by_map)
 
     print('\n🎉 全部处理完成！')
     _print_top_orphans(unique_map, cited_by_map, lead='\n')

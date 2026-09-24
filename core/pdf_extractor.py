@@ -1,7 +1,6 @@
 import multiprocessing
 import queue
 import re
-from pathlib import Path
 
 import pdfplumber
 

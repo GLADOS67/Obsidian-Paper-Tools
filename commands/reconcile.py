@@ -7,7 +7,8 @@ from typing import Dict, List, Optional, Set, Tuple
 
 sys.stdout.reconfigure(encoding='utf-8')
 from core import iter_vault_dirs
-from core.frontmatter import parse_frontmatter_file
+from core.cache import read_text_safe
+from core.frontmatter import parse_frontmatter_batch
 from core.refs import (
     parse_h1_wikilink, extract_wikilink_name,
     first_ref_target, norm_stems, pa_stem_variants,
@@ -15,22 +16,6 @@ from core.refs import (
 
 _CITATION_RE = re.compile(r'_(?:fwd_)?citations$')
 _DUPE_SUFFIX_RE = re.compile(r' \d+$')
-
-
-def _resolve_pa_target(pa_path: Path) -> Optional[str]:
-    try:
-        parsed = parse_h1_wikilink(pa_path.read_text(encoding='utf-8'))
-    except Exception:
-        return None
-    return parsed[0] if parsed else None
-
-
-def _resolve_pt_target(chi_path: Path) -> Optional[str]:
-    fm, _ = parse_frontmatter_file(chi_path)
-    if not fm:
-        return None
-    pt = extract_wikilink_name(fm.get('paper-translate'))
-    return pt or first_ref_target(fm.get('reference', []))
 
 
 def build_clippings_index(vault_root: Path) -> Tuple[Dict[str, str], Set[str], Set[str]]:
@@ -43,8 +28,7 @@ def build_clippings_index(vault_root: Path) -> Tuple[Dict[str, str], Set[str], S
         if not clip_dir.is_dir():
             continue
         mds = sorted(clip_dir.rglob('*.md'))
-        with ThreadPoolExecutor() as ex:  # IO并行解析，索引更新保持原顺序串行
-            parsed = list(ex.map(parse_frontmatter_file, mds))
+        parsed = parse_frontmatter_batch(mds)
         for md, (fm, _) in zip(mds, parsed):
             stem = md.stem
             for variant in norm_stems(stem):
@@ -115,8 +99,13 @@ def run_reconcile(vault_root: str = r'C:\Vault',
             claude_mds = sorted(claude_dir.glob('*.md'))
             pa_mds = [md for md in claude_mds
                       if 'zh-CN' not in md.stem and not md.stem.endswith('_figures')]
+
+            def _resolve_pa(md: Path) -> Optional[str]:
+                parsed = parse_h1_wikilink(read_text_safe(md))
+                return parsed[0] if parsed else None
+
             with ThreadPoolExecutor() as ex:  # IO并行解析H1，判定保持原顺序串行
-                pa_targets = dict(zip(pa_mds, ex.map(_resolve_pa_target, pa_mds)))
+                pa_targets = dict(zip(pa_mds, ex.map(_resolve_pa, pa_mds)))
             for md in claude_mds:
                 stem = md.stem
                 if 'zh-CN' in stem:
@@ -137,10 +126,13 @@ def run_reconcile(vault_root: str = r'C:\Vault',
 
         if chi_dir.is_dir():
             chi_mds = sorted(chi_dir.glob('*.md'))
-            with ThreadPoolExecutor() as ex:  # IO并行解析frontmatter
-                pt_targets = list(ex.map(_resolve_pt_target, chi_mds))
-            for md, target in zip(chi_mds, pt_targets):
+            chi_parsed = parse_frontmatter_batch(chi_mds)
+            for md, (fm, _) in zip(chi_mds, chi_parsed):
                 stem = md.stem
+                target = None
+                if fm:
+                    pt = extract_wikilink_name(fm.get('paper-translate'))
+                    target = pt or first_ref_target(fm.get('reference', []))
                 action = resolve_action(target, vname, stem, clip_to_vault, pt_referenced)
                 pt_info[str(md)] = (md, vname, action)
                 print(f'[PT] {action:20s} {_rel(vault_root, md)}')

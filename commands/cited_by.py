@@ -3,7 +3,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
-from core.crossref_api import get_cited_by_pubmed, load_cache, save_cache
+from core.crossref_api import (get_cited_by_pubmed, load_cite_by_cache,
+                               load_doi_title_cache, save_cite_by_cache,
+                               save_doi_title_cache)
 from core.doi import PATTERN_DOI, get_main_doi, process_doi
 from core.frontmatter import (
     apply_cited_by, build_doi_set, cited_by_fresh, dump_frontmatter,
@@ -25,8 +27,8 @@ def _extract_main_doi(fm: dict, body: str) -> Optional[str]:
     return process_doi(m.group(0))[0] if m else None
 
 
-def _process_cited_file(md_file: Path, cache: dict, existing: set,
-                       max_rows: int, lock: threading.Lock) -> None:
+def _process_cited_file(md_file: Path, cite_by_cache: dict, doi_title_cache: dict,
+                       existing: set, max_rows: int, lock: threading.Lock) -> None:
     try:
         content = md_file.read_text(encoding='utf-8')
     except Exception as e:
@@ -43,7 +45,8 @@ def _process_cited_file(md_file: Path, cache: dict, existing: set,
         return
 
     with lock:
-        count, citing_dois = get_cited_by_pubmed(main_doi, cache, existing, max_rows)
+        count, citing_dois = get_cited_by_pubmed(main_doi, cite_by_cache,
+                                                 doi_title_cache, existing, max_rows)
     apply_cited_by(fm, citing_dois)
     with lock:
         existing.update(d.lower() for d in citing_dois)
@@ -64,17 +67,20 @@ def run_cited_by(path: str, max_rows: int = 10) -> None:
     if resolved.is_dir() and resolved.name != 'Clippings' and (resolved / 'Clippings').is_dir():
         resolved = resolved / 'Clippings'
     md_files = [resolved] if resolved.is_file() else sorted(resolved.rglob('*.md'))
-    cache = load_cache()
+    cite_by_cache = load_cite_by_cache()
+    doi_title_cache = load_doi_title_cache()
     existing = build_doi_set(resolved if resolved.is_dir() else resolved.parent, include_refs=True)
     lock = threading.Lock()
 
     with ThreadPoolExecutor() as ex:
-        futures = {ex.submit(_process_cited_file, f, cache, existing, max_rows, lock): f
+        futures = {ex.submit(_process_cited_file, f, cite_by_cache, doi_title_cache,
+                             existing, max_rows, lock): f
                    for f in md_files}
         for fut in as_completed(futures):
             fut.result()
 
-    save_cache(cache)
+    save_cite_by_cache(cite_by_cache)
+    save_doi_title_cache(doi_title_cache)
 
 
 def run_cited_by_interactive() -> None:

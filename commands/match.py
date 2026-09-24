@@ -4,8 +4,9 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+from core.cache import read_text_safe
 from core.doi import PATTERN_DOI as DOI_RE
-from core.frontmatter import parse_frontmatter_file, dump_frontmatter
+from core.frontmatter import dump_frontmatter, parse_frontmatter_batch, parse_frontmatter_file
 from core.obsidian_path import SM_QUICK
 from core.refs import (
     WIKILINK_RE, LINK_TARGET_RE,
@@ -40,35 +41,6 @@ def _jaccard(a: set, b: set) -> float:
     return inter / union if union else 0.0
 
 
-def _read_text_safe(md: Path) -> str:
-    try:
-        return md.read_text(encoding='utf-8')
-    except Exception:
-        return ''
-
-
-def _chinese_title_from_text(text: str) -> Optional[str]:
-    if parsed := parse_h1_wikilink(text):
-        return parsed[1]
-    for line in text.split('\n'):
-        stripped = line.lstrip('#').strip()
-        if stripped and any('一' <= c <= '鿿' for c in stripped):
-            return stripped
-    return None
-
-
-def _register_pa(md: Path, text: str, pa_index: Dict[str, Path],
-                 pa_text: Dict[str, str], pa_reverse: Dict[str, Tuple[Path, str]]) -> None:
-    """登记 PA 笔记：正向索引 + 小写正文缓存 + H1 wikilink 反向索引（下划线/空格双写）。"""
-    stem = md.stem
-    pa_index[stem] = md
-    pa_text[stem] = text.lower()
-    if h1_info := parse_h1_wikilink(text):
-        clip_stem, ch_title = h1_info
-        pa_reverse[clip_stem] = (md, ch_title)
-        pa_reverse[clip_stem.replace('_', ' ')] = (md, ch_title)
-
-
 def _fuzzy_best(stem: str, candidates: Dict[str, Path],
                 threshold: float = FUZZY_THRESHOLD) -> Optional[Tuple[Path, float]]:
     stem_lower = stem.lower()
@@ -83,24 +55,16 @@ def _fuzzy_best(stem: str, candidates: Dict[str, Path],
     return (best, best_score) if best and best_score >= threshold else None
 
 
-def _pa_by_doi(pa_index: Dict[str, Path], pa_text: Dict[str, str],
-               pa_alias: Dict[str, str], doi: str,
-               memo: Dict[str, Optional[Tuple[Path, Optional[str], str]]]
-               ) -> Tuple[Optional[Path], Optional[str], str]:
-    """在索引时缓存的 PA 正文(小写)中查找包含该 DOI 的文件，避免重复 IO；memo 避免重复全文扫描。"""
-    if doi not in memo:
-        memo[doi] = next(
-            ((pa_index[s], pa_alias.get(s), 'doi') for s, t in pa_text.items() if doi in t),
-            None)
-    return memo[doi] or (None, None, '')
-
-
 def _find_pa(clip_stem: str, pa_index: Dict[str, Path],
              pa_reverse: Dict[str, Tuple[Path, str]], pa_text: Dict[str, str],
              pa_alias: Dict[str, str], doi: Optional[str],
              doi_memo: Dict[str, Optional[Tuple[Path, Optional[str], str]]]
              ) -> Tuple[Optional[Path], Optional[str], str]:
-    """按 reverse → filename → doi → fuzzy 顺序定位 PA 笔记。"""
+    """按 reverse → filename → doi → fuzzy 顺序定位 PA 笔记。
+
+    doi 命中：在索引时缓存的 PA 正文(小写)中查找包含该 DOI 的文件；
+    doi_memo 缓存每次 DOI 的扫描结果，避免重复全文扫描。
+    """
     underscore_stem = clip_stem.replace(' ', '_')
     rev = pa_reverse.get(clip_stem) or pa_reverse.get(underscore_stem)
     if rev:
@@ -108,7 +72,11 @@ def _find_pa(clip_stem: str, pa_index: Dict[str, Path],
     if pa_path := pa_index.get(underscore_stem):
         return pa_path, pa_alias.get(pa_path.stem), 'filename'
     if doi:
-        found = _pa_by_doi(pa_index, pa_text, pa_alias, doi, doi_memo)
+        if doi not in doi_memo:
+            doi_memo[doi] = next(
+                ((pa_index[s], pa_alias.get(s), 'doi') for s, t in pa_text.items() if doi in t),
+                None)
+        found = doi_memo[doi] or (None, None, '')
         if found[0]:
             return found
     if result := _fuzzy_best(underscore_stem, pa_index):
@@ -213,8 +181,7 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     chi_reverse: Dict[str, Tuple[Path, str]] = {}
 
     chi_mds = sorted(chi_dir.rglob('*.md'))
-    with ThreadPoolExecutor() as ex:  # IO并行，字典更新保持原顺序串行
-        chi_parsed = list(ex.map(parse_frontmatter_file, chi_mds))
+    chi_parsed = parse_frontmatter_batch(chi_mds)
     for md, (fm, _) in zip(chi_mds, chi_parsed):
         if not fm:
             continue
@@ -245,7 +212,7 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     if claude_dir.is_dir():
         claude_mds = sorted(claude_dir.rglob('*.md'))
         with ThreadPoolExecutor() as ex:  # IO并行读取正文
-            claude_texts = list(ex.map(_read_text_safe, claude_mds))
+            claude_texts = list(ex.map(read_text_safe, claude_mds))
         for md, text in zip(claude_mds, claude_texts):
             stem = md.stem
             if 'zh-CN' in stem:
@@ -253,8 +220,21 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
             if stem.endswith('_figures'):
                 fe_index[stem[:-8]] = md
                 continue
-            _register_pa(md, text, pa_index, pa_text, pa_reverse)
-            if ch := _chinese_title_from_text(text):
+            pa_index[stem] = md
+            pa_text[stem] = text.lower()
+            if h1_info := parse_h1_wikilink(text):
+                clip_stem, ch_title = h1_info
+                pa_reverse[clip_stem] = (md, ch_title)
+                pa_reverse[clip_stem.replace('_', ' ')] = (md, ch_title)
+                ch = ch_title
+            else:
+                ch = None
+                for line in text.split('\n'):
+                    stripped = line.lstrip('#').strip()
+                    if stripped and any('一' <= c <= '鿿' for c in stripped):
+                        ch = stripped
+                        break
+            if ch:
                 pa_alias[stem] = ch
 
     for fe_stem, fe_path in fe_index.items():
@@ -273,7 +253,7 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     if reconcile_claude and TRASH_CLAUDE.is_dir():
         trash_files = sorted(TRASH_CLAUDE.rglob('*.md'))
         with ThreadPoolExecutor() as ex:
-            trash_texts = list(ex.map(_read_text_safe, trash_files))
+            trash_texts = list(ex.map(read_text_safe, trash_files))
         for md, text in zip(trash_files, trash_texts):
             stem = md.stem
             if 'zh-CN' in stem:
@@ -284,7 +264,11 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
                     trash_fe_source[stem[:-8]] = md
                 continue
             if stem not in pa_index:
-                _register_pa(md, text, pa_index, pa_text, pa_reverse)
+                pa_index[stem] = md
+                pa_text[stem] = text.lower()
+                if h1_info := parse_h1_wikilink(text):
+                    pa_reverse[h1_info[0]] = (md, h1_info[1])
+                    pa_reverse[h1_info[0].replace('_', ' ')] = (md, h1_info[1])
                 trash_pa_source[stem] = md
         print(f'TRASH: {len(trash_pa_source)} PA, {len(trash_fe_source)} FE scanned\n')
 

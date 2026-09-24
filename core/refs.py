@@ -1,5 +1,5 @@
 import re
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 from core.doi import PATTERN_DOI, CANONICAL_CHAR_TABLE, is_plausible_doi, process_doi
 
