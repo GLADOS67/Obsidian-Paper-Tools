@@ -10,7 +10,7 @@ from core.crossref_api import (load_cite_by_cache, load_doi_title_cache,
 from core.doi import (PATTERN_DOI, PATTERN_SAFE_DOI, find_plausible_dois,
                       is_plausible_doi, normalize_unicode_dashes, process_doi,
                       repair_doi_text)
-from core.frontmatter import (dump_frontmatter, parse_frontmatter_batch,
+from core.frontmatter import (dump_frontmatter, fm_title, parse_frontmatter_batch,
                               parse_frontmatter_str)
 from core.markdown_utils import clean_markdown_body
 from core.refs import split_wikilink, wikilink_doi
@@ -103,6 +103,28 @@ def _resolve_self_doi(file_stem: str, refs: List[str],
     if doi_title_cache and (doi := lookup_doi_by_title(file_stem, doi_title_cache)):
         return process_doi(doi)[0]
     return None
+
+
+PMC_FLAG_MARK = 'us_flag.svg'
+
+
+def _pin_pmc_reference(fm: Dict, rest: str, file_stem: str) -> bool:
+    """PMC网页剪藏协议：正文开头(前500字符)含 us_flag.svg 标志的文件，将 reference[0] 置为 [[标题|doi]]。
+
+    仅当 ref0 为 [[doi_safe|doi]] 形式时升级 name（标题=文件名 stem，与 pdf2md/pmce 一致）；
+    已标题形式或非 PMC 文件不动。DOI 保持原值不校验。
+    """
+    if PMC_FLAG_MARK not in rest[:500]:
+        return False
+    refs = fm.get('reference')
+    if not isinstance(refs, list) or not refs:
+        return False
+    parsed = split_wikilink(str(refs[0]).strip())
+    if parsed is None or not PATTERN_SAFE_DOI.match(parsed[0]):
+        return False
+    refs[0] = f'[[{file_stem}|{parsed[1]}]]'
+    fm['特殊引用数'] = int(fm.get('特殊引用数', 0)) + 1
+    return True
 
 
 def _process_one_file(file: Path, unique_map: Dict[str, DoiEntry],
@@ -239,6 +261,8 @@ def run_markdown_graph(directory: str, depth: int = 0) -> None:
         raw_refs = fm.get('reference', [])  # 原始引用（重建会替换name，破坏name==stem匹配），self_doi 优先用它解析
         refs, _ = _rebuild_reference_list(raw_refs, unique_map)
         fm['reference'] = refs
+        if _pin_pmc_reference(fm, rest, file.stem):
+            print(f'  ✅ PMC协议: {file.name} reference[0] 已置为 [[标题|DOI]]')
         if fm.get('cited_by'):
             fm['cited_by'] = _resolve_cited_by(fm['cited_by'], unique_map)
         self_doi = _resolve_self_doi(file.stem, raw_refs, doi_title_cache)
@@ -248,14 +272,8 @@ def run_markdown_graph(directory: str, depth: int = 0) -> None:
         fm['被引'] = [f'[[{s}]]' for s in citing_stems]
         fm['tags'] = ['正向' if (len(citing_stems) - fm.get('特殊引用数', 0)) > 0 else '负向']
         fm.pop('引用情况', None)
-        title = fm.get('title')
-        if isinstance(title, list):
-            title = ' '.join(str(t) for t in title)
-        title = str(title).strip() if title else ''
-        # 空标题或 wikilink 包裹的标题（历史遗留 [[...]] 格式）视为无效，回退文件地址（文件名即标题）
-        if not title or '[' in title or ']' in title:
-            title = file.stem
-            fm['title'] = title
+        title = fm_title(fm, file.stem)
+        # 保险：不强制 title = 文件名；title 缺失或无效时保留原样，不创建、不覆盖
         if self_doi and is_plausible_doi(self_doi) and title:
             put_doi_title(doi_title_cache, self_doi, title)
             for ref in refs:

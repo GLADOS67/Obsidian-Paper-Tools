@@ -23,10 +23,11 @@ from core.frontmatter import (build_doi_set, dump_frontmatter,
                                parse_frontmatter_str)
 from core.http import get_session
 from core.markdown_utils import clean_markdown_body
-from core.refs import build_existing_dois, canonicalize_stem, new_doi_wikilinks, process_existing_references
+from core.refs import (build_existing_dois, canonicalize_stem, new_doi_wikilinks,
+                       pin_main_doi, process_existing_references)
 from core import try_copy, iter_vault_dirs
 from core.pdf_extractor import convert_pdf_to_md, extract_dois_from_pdf
-from config import (DEFAULT_IMAGE_PATH, DEFAULT_MD_PATH, DEFAULT_PDF_PATH,
+from config import (CPU_CORES, DEFAULT_IMAGE_PATH, DEFAULT_MD_PATH, DEFAULT_PDF_PATH,
                     DEFAULT_ZIP_PATH, MINERU_TOKEN, OBSIDIAN_ROOT)
 
 _http = get_session()
@@ -137,15 +138,6 @@ def _merge_new_dois(fm, all_dois, md_name):
     print(f'已将{len(new_refs)}个唯一DOI添加到 {md_name} 的reference')
 
 
-def _pin_main_doi(fm, main_doi, md_stem):
-    lower = main_doi.lower()
-    refs = [r for r in fm.get('reference', [])
-            if not (r.startswith('[[') and r.endswith(']]') and '|' in r
-                    and r[2:-2].split('|', 1)[1].strip().lower() == lower)]
-    refs.insert(0, f'[[{md_stem}|{main_doi}]]')
-    fm['reference'] = refs
-
-
 def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, doi_title_cache,
                         cite_by_cache, enable_cited_by=False, cited_by_max=10,
                         images_dir=None, clippings_doi_set=None, ref_max_age=15):
@@ -208,7 +200,7 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, doi_title_c
     else:
         print(f'超{ref_max_age}年({year})，仅添加主DOI: {md_dst.name}')
     if main_doi:
-        _pin_main_doi(fm, main_doi, md_dst.stem)
+        pin_main_doi(fm, main_doi, md_dst.stem)
 
     rest = clean_markdown_body(rest)
     if images_dir:
@@ -318,7 +310,7 @@ def _run_local_batch(pdf_files, path_md0, enable_api_refs,
             print('  转换失败，跳过')
             return None
         md_dst = pm / f'{canonicalize_stem(pdf_path.stem)}.md'
-        fm = {'title': pdf_path.stem, 'pdf_path': str(pdf_path)}
+        fm = {'pdf_path': str(pdf_path)}
         try:
             md_dst.write_text(dump_frontmatter(fm, md_content), encoding='utf-8')
         except Exception as e:
@@ -333,12 +325,51 @@ def _run_local_batch(pdf_files, path_md0, enable_api_refs,
             _mark_pdf_done(pdf_path)
         return md_dst.name
 
-    with ThreadPoolExecutor(max_workers=min(4, len(pdf_files))) as ex:
+    with ThreadPoolExecutor(max_workers=min(CPU_CORES, len(pdf_files))) as ex:
         futures = {ex.submit(_process_one, pf, i): pf for i, pf in enumerate(pdf_files, 1)}
         for fut in as_completed(futures):
             name = fut.result()
             if name:
                 print(f'  完成 -> {name}')
+
+
+def _process_downloaded_one(idx, f_info, path_zip, path_md0, name_to_path, path_pdf,
+                            images_output, enable_api_refs, doi_title_cache, cite_by_cache,
+                            enable_cited_by, cited_by_max, clippings_doi_set, ref_max_age):
+    """单个 MinerU 结果：解压→移MD→拷图→补全引用→标记完成。各文件独立，供线程池并行。"""
+    file_name = f_info['file_name']
+    data_id = f_info['data_id']
+    zip_path_ = path_zip / f'{data_id}.zip'
+    if not zip_path_.exists():
+        return
+    print(f'[{idx}] 处理: {file_name}')
+    temp_dir = path_zip / f'temp_{data_id}'
+    temp_dir.mkdir(exist_ok=True)
+    try:
+        with zipfile.ZipFile(zip_path_, 'r') as z:
+            z.extractall(temp_dir)
+        md_src, img_src, json_src = _find_extracted_files(temp_dir)
+        md_dst = None
+        if md_src:
+            md_dst = path_md0 / f'{canonicalize_stem(Path(file_name).stem)}.md'
+            shutil.move(str(md_src), str(md_dst))
+        if img_src:
+            for img_file in img_src.glob('*'):
+                try:
+                    shutil.copy2(img_file, images_output / img_file.name)
+                except Exception:
+                    pass
+        if md_dst:
+            pdf_file_path = name_to_path.get(file_name, path_pdf / file_name)
+            if _process_md_content(md_dst, json_src, pdf_file_path, enable_api_refs,
+                                   doi_title_cache, cite_by_cache, enable_cited_by,
+                                   cited_by_max, images_output, clippings_doi_set,
+                                   ref_max_age):
+                _mark_pdf_done(pdf_file_path)
+    except Exception as e:
+        print(f'处理失败: {e}')
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
@@ -357,46 +388,22 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
          f_info['file_name'], idx)
         for idx, f_info in enumerate(files, 1)
     ]
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=min(CPU_CORES * 2, 5)) as executor:
         futures = {executor.submit(_download_zip, *task): task[3] for task in download_tasks}
         for future in as_completed(futures):
             future.result()
 
     clippings_doi_set = build_doi_set(path_md0) if enable_cited_by else None
-    for idx, f_info in enumerate(files, 1):
-        file_name = f_info['file_name']
-        data_id = f_info['data_id']
-        zip_path_ = path_zip / f'{data_id}.zip'
-        if not zip_path_.exists():
-            continue
-        print(f'[{idx}] 处理: {file_name}')
-        temp_dir = path_zip / f'temp_{data_id}'
-        temp_dir.mkdir(exist_ok=True)
-        try:
-            with zipfile.ZipFile(zip_path_, 'r') as z:
-                z.extractall(temp_dir)
-            md_src, img_src, json_src = _find_extracted_files(temp_dir)
-            md_dst = None
-            if md_src:
-                md_dst = path_md0 / f'{canonicalize_stem(Path(file_name).stem)}.md'
-                shutil.move(str(md_src), str(md_dst))
-            if img_src:
-                for img_file in img_src.glob('*'):
-                    try:
-                        shutil.copy2(img_file, images_output / img_file.name)
-                    except Exception:
-                        pass
-            if md_dst:
-                pdf_file_path = name_to_path.get(file_name, path_pdf / file_name)
-                if _process_md_content(md_dst, json_src, pdf_file_path, enable_api_refs,
-                                       doi_title_cache, cite_by_cache, enable_cited_by,
-                                       cited_by_max, images_output, clippings_doi_set,
-                                       ref_max_age):
-                    _mark_pdf_done(pdf_file_path)
-        except Exception as e:
-            print(f'处理失败: {e}')
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+    with ThreadPoolExecutor(max_workers=min(CPU_CORES * 2, 4)) as ex:
+        futures = [
+            ex.submit(_process_downloaded_one, idx, f_info, path_zip, path_md0,
+                      name_to_path, path_pdf, images_output, enable_api_refs,
+                      doi_title_cache, cite_by_cache, enable_cited_by, cited_by_max,
+                      clippings_doi_set, ref_max_age)
+            for idx, f_info in enumerate(files, 1)
+        ]
+        for fut in futures:
+            fut.result()
     print(f'批次 {batch_id} 处理完成！Markdown: {path_md0}，图片: {images_output}')
 
 
@@ -509,7 +516,7 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
         batch_ids.append(bid)
         print(f'批次 {batch_idx} 申请链接成功 | batch_id：{bid}')
 
-        with ThreadPoolExecutor(max_workers=5) as ex:
+        with ThreadPoolExecutor(max_workers=min(CPU_CORES * 2, 5)) as ex:
             uploaded_files = [f for f in ex.map(_upload_one, batch_files, url_result['upload_urls']) if f]
         batch_file_map[bid] = uploaded_files
         total_success += len(uploaded_files)

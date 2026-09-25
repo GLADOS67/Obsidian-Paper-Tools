@@ -56,14 +56,21 @@ def _fuzzy_search(dir_path: Path, stem_raw: str) -> Optional[Path]:
 
 def _fallback_search(file_clean: str) -> Optional[Path]:
     basename = Path(file_clean).name
-    for name in dict.fromkeys((basename, Path(basename).stem)):
-        try:
-            matches = sorted(OBSIDIAN_ROOT.rglob(f'{name}.md'), key=lambda p: p.stat().st_mtime, reverse=True)
-            if matches:
-                return matches[0]
-        except Exception:
-            continue
-    return None
+    bests = {basename: None, Path(basename).stem: None}
+    try:
+        for p in OBSIDIAN_ROOT.rglob('*.md'):
+            if (t := p.stem) not in bests:
+                continue
+            cur = bests[t]
+            try:  # 单文件 stat 失败（占用/权限/已删除）只跳过该候选，不中断整个遍历
+                newer = cur is None or p.stat().st_mtime > cur.stat().st_mtime
+            except OSError:
+                continue
+            if newer:
+                bests[t] = p
+    except Exception:
+        return None
+    return bests[basename] or bests[Path(basename).stem]
 
 
 def resolve_input_path(input_str: str, fallback_search: bool = False) -> Optional[Path]:

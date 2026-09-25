@@ -1,5 +1,7 @@
+import os
 from pathlib import Path
 
+CPU_CORES = max(1, (os.cpu_count() or 2) - 1)  # 并发基准参数（预留1核防死机）：IO密集 min(CPU_CORES*2, 原上限)，CPU密集 min(CPU_CORES, 数量)
 MINERU_TOKEN = Path(r'C:\ResearchFront\DATA\API\MinerU.txt')
 OBSIDIAN_ROOT = Path(r'C:\Vault')
 DEFAULT_PDF_PATH = Path(r'C:\Vault\PDF')

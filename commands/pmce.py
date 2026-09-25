@@ -5,7 +5,7 @@
   2. EuropePMC search (resultType=core) 批量取元数据 + pmcid + isOpenAccess
   3. OA条目: fullTextXML (JATS) → 标准库ET解析 → 无frontmatter MD
   4. 非OA条目: print doi-标题
-  5. 收尾自动 run_markdown_graph(Clippings)
+  5. 收尾自动 run_markdown_graph(Clippings) + reference[0] 置为 [[标题|DOI]]
 """
 
 import html
@@ -21,9 +21,11 @@ from curl_cffi import requests as curl_requests
 from core.cache import read_text_auto
 from core.crossref_api import (load_doi_title_cache, put_doi_title,
                                save_doi_title_cache)
-from core.doi import (PATTERN_DOI, PATTERN_FS_INVALID, find_plausible_dois,
-                      normalize_unicode_dashes, process_doi)
+from core.doi import (PATTERN_DOI, PATTERN_FS_INVALID, PATTERN_SAFE_DOI,
+                      find_plausible_dois, normalize_unicode_dashes, process_doi)
+from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.http import get_session, polite_sleep
+from core.refs import pin_main_doi, split_wikilink
 from commands.markdown_graph import run_markdown_graph
 
 EUPMC_BASE = 'https://www.ebi.ac.uk/europepmc/webservices/rest'
@@ -159,8 +161,12 @@ def _match_one(index, kind, val):
         return by_pmid.get(val)
     if kind == 'doi':
         return by_doi.get(lv)
-    best, best_score = None, 0.0
+    # ratio ≤ 2·min(a,b)/(a+b)，长度越界候选必低于阈值，免构造 SequenceMatcher
+    ln, best, best_score = len(lv), None, 0.0
     for title_lower, r in titles:
+        lt = len(title_lower)
+        if 2.0 * min(ln, lt) < _TITLE_SIM * (ln + lt):
+            continue
         score = SequenceMatcher(None, title_lower, lv).ratio()
         if score > best_score:
             best, best_score = r, score
@@ -415,6 +421,42 @@ def _print_non_oa(non_oa):
         print(f'  {m.get("doi") or "无DOI"}  {html.unescape(m.get("title", ""))}')
 
 
+def _pin_self_references(written_pairs):
+    """markdown 图谱后：将每篇刚写文件的 reference[0] 置为 [[标题|自身DOI]]。
+
+    written_pairs: [(meta, target), ...]；meta['doi'] 为空或文件无 reference 时跳过。
+    标题 = target.stem（与 pdf2md 的 md_stem 语义一致）；ref0 由 safe 形式升级时
+    '特殊引用数' 同步 +1。
+    """
+    pinned = 0
+    for meta, target in written_pairs:
+        doi = process_doi(meta.get('doi') or '')[0]
+        if not doi:
+            continue
+        try:
+            fm, rest = parse_frontmatter_str(read_text_auto(target))
+        except Exception as e:
+            print(f'pin 读取失败 {target.name}: {e}')
+            continue
+        if not isinstance(fm, dict) or not isinstance(fm.get('reference'), list):
+            continue
+        refs = fm['reference']
+        if not refs:
+            continue
+        parsed = split_wikilink(str(refs[0]).strip())
+        was_special = parsed is not None and not PATTERN_SAFE_DOI.match(parsed[0])
+        pin_main_doi(fm, doi, target.stem)
+        if not was_special:
+            fm['特殊引用数'] = int(fm.get('特殊引用数', 0)) + 1
+        try:
+            target.write_text(dump_frontmatter(fm, rest), encoding='utf-8')
+            pinned += 1
+        except Exception as e:
+            print(f'pin 写盘失败 {target.name}: {e}')
+    if pinned:
+        print(f'已将 {pinned} 篇的 reference[0] 置为 [[标题|DOI]]')
+
+
 def run_pmce(input_arg, path, no_graph=False, dry_run=False):
     pending = Path(path)
     pending.mkdir(parents=True, exist_ok=True)
@@ -468,7 +510,7 @@ def run_pmce(input_arg, path, no_graph=False, dry_run=False):
             continue
         try:
             target.write_text(_compose_md(meta, xml), encoding='utf-8')
-            written.append(target)
+            written.append((meta, target))
             print(f'[{i}/{len(jobs)}] {target.name}')
         except Exception as e:
             print(f'解析失败 {meta.get("id")}: {e}')
@@ -478,4 +520,5 @@ def run_pmce(input_arg, path, no_graph=False, dry_run=False):
     if written and not no_graph:
         print('建立引用图谱...')
         run_markdown_graph(str(pending.parent))
+        _pin_self_references(written)
     _print_non_oa(non_oa)

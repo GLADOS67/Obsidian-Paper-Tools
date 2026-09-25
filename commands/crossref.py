@@ -8,7 +8,7 @@ from core.crossref_api import (fetch_references, get_doi_from_citation,
                                 save_doi_title_cache)
 from core.doi import (PATTERN_DOI, extract_doi_from_frontmatter,
                        get_main_doi, process_doi, repair_doi_text)
-from core.frontmatter import dump_frontmatter, parse_frontmatter_str
+from core.frontmatter import dump_frontmatter, fm_title, parse_frontmatter_str
 from core.obsidian_path import resolve_input_path, SM_QUICK
 from core.pdf_extractor import extract_first_doi_from_pdf
 from core.refs import new_doi_wikilinks, process_existing_references, split_wikilink
@@ -58,18 +58,6 @@ def _get_main_doi(pdf_path: Optional[Path], content: Optional[str], fm: Optional
     return get_main_doi(fm or {}, content or '')
 
 
-def _get_md_title(fm_data, fallback_stem):
-    if fm_data:
-        title = fm_data.get('title')
-        if isinstance(title, list):
-            title = ' '.join(str(t) for t in title)
-        title = str(title).strip() if title else ''
-        # wikilink 包裹标题（[[...]]）视为无效，回退文件地址（文件名即标题）
-        if title and '[' not in title and ']' not in title:
-            return title
-    return fallback_stem
-
-
 def _resolve_doi_by_title(title: str, md_title: str, cache: dict) -> Optional[str]:
     candidate = get_doi_from_citation(title, cache)
     if not candidate:
@@ -113,11 +101,11 @@ def process_file(file_path: Path, cache: dict) -> None:
     print(f'处理{"Markdown" if suffix == ".md" else "PDF"}: {file_path}')
     pdf_path = file_path if suffix == '.pdf' else None
     stem = file_path.stem
-    md_title = ''  # 惰性计算的 _get_md_title 结果
+    md_title = ''  # 惰性计算的 fm_title 结果
     main_doi = _get_main_doi(pdf_path, content, fm_data)
     if not main_doi:
         print('未提取到 DOI，尝试标题搜索...')
-        md_title = _get_md_title(fm_data, stem)
+        md_title = fm_title(fm_data, stem)
         main_doi = _resolve_doi_by_title(fm_data.get('title', stem), md_title, cache)
     if not main_doi:
         if suffix == '.md':
@@ -126,7 +114,7 @@ def process_file(file_path: Path, cache: dict) -> None:
             print('未能匹配论文，操作终止。')
         return
     print(f'目标DOI: {main_doi}')
-    put_doi_title(cache, main_doi, md_title or _get_md_title(fm_data, stem))
+    put_doi_title(cache, main_doi, md_title or fm_title(fm_data, stem))
     refs, _ = fetch_references(main_doi, cache)
     if suffix == '.md':
         update_md_references(file_path, refs, main_doi)
@@ -213,7 +201,7 @@ def _handle_takeover_mode(file_path: Path, cache: dict) -> None:
     print(f'￥ 接管模式: {file_path}')
     stem = file_path.stem
     title = fm_data.get('title', stem) if suffix == '.md' else stem
-    md_title = _get_md_title(fm_data, stem)
+    md_title = fm_title(fm_data, stem)
     print(f'使用标题搜索: {title}')
     main_doi = _resolve_doi_by_title(title, md_title, cache)
     if not main_doi:

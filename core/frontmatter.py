@@ -47,8 +47,21 @@ def dump_frontmatter(fm: Dict, body: str) -> str:
     if fm:
         yaml_str = yaml.dump(fm, sort_keys=False, allow_unicode=True,
                              default_flow_style=False, Dumper=_YamlDumper).rstrip('\n')
+        # 换行归一：Windows write_text 会把 \n→\r\n，若 body 残留 \r\n 会变 \r\r\n 损坏
+        body = body.replace('\r\n', '\n').replace('\r', '\n')
         return f'---\n{yaml_str}\n---\n{body}'
     return body
+
+
+def fm_title(fm: Dict, fallback: str = '') -> str:
+    """frontmatter title → 字符串：列表拼接、去空白；空或 [[wikilink]] 包裹视为无效，回退 fallback。"""
+    if not fm:
+        return fallback
+    raw = fm.get('title')
+    if isinstance(raw, list):
+        raw = ' '.join(str(t) for t in raw)
+    title = str(raw).strip() if raw else ''
+    return title if title and '[' not in title and ']' not in title else fallback
 
 
 def cited_by_fresh(fm: Dict, days: int = 30) -> bool:

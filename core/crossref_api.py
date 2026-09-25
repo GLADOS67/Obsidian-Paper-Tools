@@ -10,7 +10,7 @@ from core.doi import TITLE_NORM_TABLE, is_plausible_doi, process_doi
 from core.frontmatter import apply_cited_by, cited_by_fresh
 from core.http import get_session, polite_sleep
 
-from config import CITE_BY_CACHE, CROSSREF_MAILTO, DOI_TITLE_CACHE
+from config import CPU_CORES, CITE_BY_CACHE, CROSSREF_MAILTO, DOI_TITLE_CACHE
 CROSSREF_API_BASE = 'https://api.crossref.org/works'
 
 _LOCK = threading.Lock()
@@ -215,7 +215,7 @@ def fetch_references(doi: str, cache: dict = None) -> Tuple[List[Dict], Optional
 
     if refs_missing:
         print(f'并行补全 {len(refs_missing)} 个缺失DOI...')
-        with ThreadPoolExecutor(max_workers=4) as ex:
+        with ThreadPoolExecutor(max_workers=min(CPU_CORES * 2, 4)) as ex:
             futures = {ex.submit(get_doi_from_citation, r['unstructured'], cache, _LOCK): r
                        for r in refs_missing}
             for fut in as_completed(futures):

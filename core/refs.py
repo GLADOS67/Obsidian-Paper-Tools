@@ -141,3 +141,15 @@ def wikilink_doi(ref: str) -> Optional[str]:
     doi_part = (parsed[1] if parsed else ref).strip()
     m = PATTERN_DOI.search(doi_part)
     return process_doi(m.group(0))[0] if m and is_plausible_doi(m.group(0)) else None
+
+
+def pin_main_doi(fm: dict, main_doi: str, md_stem: str) -> None:
+    """去重并将 [[标题|主DOI]] 置顶为 reference[0]（main_doi 为空时不动）。"""
+    if not main_doi:
+        return
+    lower = main_doi.lower()
+    refs = [r for r in fm.get('reference', [])
+            if not (r.startswith('[[') and r.endswith(']]') and '|' in r
+                    and r[2:-2].split('|', 1)[1].strip().lower() == lower)]
+    refs.insert(0, f'[[{md_stem}|{main_doi}]]')
+    fm['reference'] = refs
