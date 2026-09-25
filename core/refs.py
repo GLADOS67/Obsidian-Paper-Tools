@@ -1,4 +1,5 @@
 import re
+from functools import lru_cache
 from typing import Iterable, List, Optional, Tuple
 
 from core.doi import PATTERN_DOI, CANONICAL_CHAR_TABLE, is_plausible_doi, process_doi
@@ -6,6 +7,16 @@ from core.doi import PATTERN_DOI, CANONICAL_CHAR_TABLE, is_plausible_doi, proces
 
 def canonicalize_stem(stem: str) -> str:
     return stem.translate(CANONICAL_CHAR_TABLE)
+
+
+def classify_claude_stem(stem: str) -> str:
+    """Claude 目录笔记分类：'zh' (zh-CN 译文) / 'fe' (*_figures) / 'pa'（普通 PA 笔记）。
+
+    合并 match.py / reconcile.py 中重复的 stem 分类判断。
+    """
+    if 'zh-CN' in stem:
+        return 'zh'
+    return 'fe' if stem.endswith('_figures') else 'pa'
 
 
 WIKILINK_RE = re.compile(r'\[\[([^|]+)\|([^]]+)\]\]')
@@ -35,18 +46,19 @@ def first_ref_target(ref_list: list) -> Optional[str]:
 def extract_doi_set(ref_list: list) -> set:
     if not ref_list:
         return set()
-    result = set()
-    for ref in ref_list:
-        if not isinstance(ref, str):
-            continue
+
+    def _target(ref: str) -> str:
         m = WIKILINK_RE.search(ref.replace('\n', ' '))
-        result.update(PATTERN_DOI.findall(m.group(2) if m else ref))
-    return result
+        return m.group(2) if m else ref
+
+    return {d for ref in ref_list if isinstance(ref, str)
+            for d in PATTERN_DOI.findall(_target(ref))}
 
 
 _STEM_PREFIX_RE = re.compile(r'^\d+_?\s*')
 
 
+@lru_cache(maxsize=None)  # 纯函数；调用方（reconcile）仅迭代不修改返回值
 def norm_stems(stem: str) -> set:
     variants = {stem, canonicalize_stem(stem)}
     variants |= {w for v in list(variants) for w in (v.replace(' ', '_'), v.replace('_', ' '))}
@@ -66,6 +78,7 @@ def norm_stems(stem: str) -> set:
     return variants
 
 
+@lru_cache(maxsize=None)  # 纯函数；调用方（reconcile）仅迭代不修改返回值
 def pa_stem_variants(pa_stem: str) -> list:
     variants = [pa_stem]
     stripped = _STEM_PREFIX_RE.sub('', pa_stem)

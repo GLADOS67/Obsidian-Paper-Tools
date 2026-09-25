@@ -1,22 +1,23 @@
 import shutil
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from core.cache import read_text_safe
 from core.doi import PATTERN_DOI as DOI_RE
-from core.frontmatter import dump_frontmatter, parse_frontmatter_batch, parse_frontmatter_file
+from core.frontmatter import dump_frontmatter, parse_frontmatter_batch
 from core.obsidian_path import SM_QUICK
 from core.refs import (
     WIKILINK_RE, LINK_TARGET_RE,
+    classify_claude_stem,
     parse_h1_wikilink, extract_wikilink_name, first_ref_target,
     extract_doi_set,
 )
 from config import OBSIDIAN_ROOT
 
 JACCARD_THRESHOLD = 0.85
-FUZZY_THRESHOLD = SM_QUICK
 TRASH_CLAUDE = OBSIDIAN_ROOT / 'TRASH' / 'Claude'
 
 
@@ -41,13 +42,20 @@ def _jaccard(a: set, b: set) -> float:
     return inter / union if union else 0.0
 
 
-def _fuzzy_best(stem: str, candidates: Dict[str, Path],
-                threshold: float = FUZZY_THRESHOLD) -> Optional[Tuple[Path, float]]:
-    stem_lower = stem.lower()
+def _fuzzy_best(stem_lower: str, candidates: List[Tuple[str, Path]],
+                threshold: float = SM_QUICK) -> Optional[Tuple[Path, float]]:
+    """candidates 为预小写的 (stem_lower, path) 列表（全循环构建一次，避免逐候选重复 lower）。
+
+    ratio ≤ quick_ratio ≤ 2·min(a,b)/(a+b)，长度越界候选必被 quick_ratio 门槛筛掉，直接跳过。
+    """
+    la, gate = len(stem_lower), threshold * 0.9
     best, best_score = None, 0.0
-    for cand_stem, cand_path in candidates.items():
-        sm = SequenceMatcher(None, stem_lower, cand_stem.lower())
-        if sm.quick_ratio() < threshold * 0.9:
+    for cand_lower, cand_path in candidates:
+        lb = len(cand_lower)
+        if 2.0 * min(la, lb) < gate * (la + lb):
+            continue
+        sm = SequenceMatcher(None, stem_lower, cand_lower)
+        if sm.quick_ratio() < gate:
             continue
         score = sm.ratio()
         if score > best_score:
@@ -56,10 +64,11 @@ def _fuzzy_best(stem: str, candidates: Dict[str, Path],
 
 
 def _find_pa(clip_stem: str, pa_index: Dict[str, Path],
-             pa_reverse: Dict[str, Tuple[Path, str]], pa_text: Dict[str, str],
-             pa_alias: Dict[str, str], doi: Optional[str],
-             doi_memo: Dict[str, Optional[Tuple[Path, Optional[str], str]]]
-             ) -> Tuple[Optional[Path], Optional[str], str]:
+              pa_reverse: Dict[str, Tuple[Path, str]], pa_text: Dict[str, str],
+              pa_alias: Dict[str, str], doi: Optional[str],
+              doi_memo: Dict[str, Optional[Tuple[Path, Optional[str], str]]],
+              pa_keys: List[Tuple[str, Path]]
+              ) -> Tuple[Optional[Path], Optional[str], str]:
     """按 reverse → filename → doi → fuzzy 顺序定位 PA 笔记。
 
     doi 命中：在索引时缓存的 PA 正文(小写)中查找包含该 DOI 的文件；
@@ -79,20 +88,21 @@ def _find_pa(clip_stem: str, pa_index: Dict[str, Path],
         found = doi_memo[doi] or (None, None, '')
         if found[0]:
             return found
-    if result := _fuzzy_best(underscore_stem, pa_index):
+    if result := _fuzzy_best(underscore_stem.lower(), pa_keys):
         return result[0], pa_alias.get(result[0].stem), 'fuzzy'
     return None, None, ''
 
 
 def _find_fe(underscore_stem: str, fe_index: Dict[str, Path],
-             fe_reverse: Dict[str, Tuple[Path, str]]
+             fe_reverse: Dict[str, Tuple[Path, str]],
+             fe_keys: List[Tuple[str, Path]]
              ) -> Tuple[Optional[Path], Optional[str], str]:
     """按 reverse → filename → fuzzy 顺序定位 FE 笔记。"""
     if rev := fe_reverse.get(underscore_stem):
         return rev[0], rev[1], 'reverse'
     if fe_path := fe_index.get(underscore_stem):
         return fe_path, None, 'filename'
-    if result := _fuzzy_best(underscore_stem + '_figures', fe_index):
+    if result := _fuzzy_best(underscore_stem.lower() + '_figures', fe_keys):
         return result[0], None, 'fuzzy'
     return None, None, ''
 
@@ -113,29 +123,36 @@ def _match_pa(clip_md: Path, fm: dict, pa_index: Dict[str, Path],
               pa_reverse: Dict[str, Tuple[Path, str]], pa_text: Dict[str, str],
               pa_alias: Dict[str, str], force: bool,
               clippings_doi_cache: Optional[str] = None,
-              doi_memo: Optional[dict] = None):
+              doi_memo: Optional[dict] = None,
+              pa_keys: List[Tuple[str, Path]] = ()):
     existing = fm.get('paper-analyze')
     if existing and not force:
         return 'skipped', None
     doi = _extract_clippings_doi(fm) if clippings_doi_cache is None else clippings_doi_cache
     found = _find_pa(clip_md.stem, pa_index, pa_reverse, pa_text, pa_alias,
-                     doi, doi_memo if doi_memo is not None else {})
+                     doi, doi_memo if doi_memo is not None else {}, pa_keys)
     return _apply_found(clip_md, fm, 'paper-analyze', existing, found, 'PA')
 
 
 def _match_fe(clip_md: Path, fm: dict, fe_index: Dict[str, Path],
-              fe_reverse: Dict[str, Tuple[Path, str]], force: bool):
+              fe_reverse: Dict[str, Tuple[Path, str]], force: bool,
+              fe_keys: List[Tuple[str, Path]] = ()):
     existing = fm.get('figure-extractor')
     if existing and not force:
         return 'skipped', None
-    found = _find_fe(clip_md.stem.replace(' ', '_'), fe_index, fe_reverse)
+    found = _find_fe(clip_md.stem.replace(' ', '_'), fe_index, fe_reverse, fe_keys)
     return _apply_found(clip_md, fm, 'figure-extractor', existing, found, 'FE')
 
 
 def _find_chi(clip_md: Path, fm: dict, chi_reverse: Dict[str, Tuple[Path, str]],
               by_source: Dict[str, Path], by_first_ref: Dict[str, Path],
-              chi_doi_sets: Dict[Path, set], threshold: float):
-    """按 reverse → source → first_ref → jaccard 顺序定位 Chi 笔记。"""
+              chi_doi_sets: Dict[Path, set], threshold: float,
+              chi_by_doi: Dict[str, List[Path]]):
+    """按 reverse → source → first_ref → jaccard 顺序定位 Chi 笔记。
+
+    jaccard：经 DOI 倒排索引 chi_by_doi 预筛（无共享 DOI 的候选得分必为 0），
+    交集大小 = 倒排命中计数，免去逐对集合运算；迭代顺序与得分语义不变。
+    """
     rev = chi_reverse.get(clip_md.stem)
     if rev:
         return rev[0], rev[1], 'reverse', 1.0
@@ -146,9 +163,17 @@ def _find_chi(clip_md: Path, fm: dict, chi_reverse: Dict[str, Tuple[Path, str]],
     if clip_fr in by_first_ref:
         return by_first_ref[clip_fr], None, 'first_ref', 1.0
     clip_dois = extract_doi_set(fm.get('reference', []))
+    inter = Counter()
+    for d in clip_dois:
+        for p in chi_by_doi.get(d, ()):
+            inter[p] += 1
+    n = len(clip_dois)
     score, chi_path = 0.0, None
     for chi_p, chi_dois in chi_doi_sets.items():
-        s = _jaccard(clip_dois, chi_dois)
+        i = inter.get(chi_p)
+        if not i:
+            continue
+        s = i / (n + len(chi_dois) - i)
         if s > score:
             score, chi_path = s, chi_p
             if s >= 1.0:  # 已达上界，无需继续扫描
@@ -199,6 +224,11 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
         pt_target = extract_wikilink_name(fm.get('paper-translate'))
         if pt_target:
             chi_reverse[pt_target] = (md, chi_display[md])
+    # DOI → Chi 路径 倒排索引（jaccard 预筛用，全循环仅构建一次）
+    chi_by_doi: Dict[str, List[Path]] = {}
+    for chi_p, dois in chi_doi_sets.items():
+        for d in dois:
+            chi_by_doi.setdefault(d, []).append(chi_p)
     print(f'Chi: {len(by_source)} src, {len(by_first_ref)} first-ref, {len(chi_doi_sets)} total\n')
 
     pa_index: Dict[str, Path] = {}
@@ -215,9 +245,10 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
             claude_texts = list(ex.map(read_text_safe, claude_mds))
         for md, text in zip(claude_mds, claude_texts):
             stem = md.stem
-            if 'zh-CN' in stem:
+            kind = classify_claude_stem(stem)
+            if kind == 'zh':
                 continue
-            if stem.endswith('_figures'):
+            if kind == 'fe':
                 fe_index[stem[:-8]] = md
                 continue
             pa_index[stem] = md
@@ -256,9 +287,10 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
             trash_texts = list(ex.map(read_text_safe, trash_files))
         for md, text in zip(trash_files, trash_texts):
             stem = md.stem
-            if 'zh-CN' in stem:
+            kind = classify_claude_stem(stem)
+            if kind == 'zh':
                 continue
-            if stem.endswith('_figures'):
+            if kind == 'fe':
                 if stem[:-8] not in fe_index:
                     fe_index[stem[:-8]] = md
                     trash_fe_source[stem[:-8]] = md
@@ -281,9 +313,12 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     doi_memo: Dict[str, Optional[Tuple[Path, Optional[str], str]]] = {}
     matched_stems: set = set()
     trash_reclaims: Dict[str, str] = {}
+    # 索引已定型，预小写键列表全循环仅构建一次（fuzzy 匹配免重复 lower）
+    pa_keys = [(s.lower(), p) for s, p in pa_index.items()]
+    fe_keys = [(s.lower(), p) for s, p in fe_index.items()]
 
-    for clip_md in sorted(clip_dir.rglob('*.md')):
-        fm, body = parse_frontmatter_file(clip_md)
+    clip_mds = sorted(clip_dir.rglob('*.md'))
+    for clip_md, (fm, body) in zip(clip_mds, parse_frontmatter_batch(clip_mds)):
         if not fm:
             print(f'SKIP (no fm): {clip_md.name}')
             for k in ('pt', 'pa', 'fe'):
@@ -297,7 +332,8 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
             stats['pt']['skipped'] += 1
         else:
             chi_path, chi_alias, method, score = _find_chi(
-                clip_md, fm, chi_reverse, by_source, by_first_ref, chi_doi_sets, threshold)
+                clip_md, fm, chi_reverse, by_source, by_first_ref, chi_doi_sets,
+                threshold, chi_by_doi)
             if (chi_path and existing_pt and (m := LINK_TARGET_RE.search(str(existing_pt)))
                     and m.group(1).strip() == chi_path.stem):
                 stats['pt']['skipped'] += 1
@@ -323,10 +359,8 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
 
         clip_doi_value = _extract_clippings_doi(fm)
         pa_result, pa_path = _match_pa(clip_md, fm, pa_index, pa_reverse, pa_text,
-                                       pa_alias, force, clip_doi_value, doi_memo)
-        stats['pa']['matched'] += pa_result == 'matched'
-        stats['pa']['skipped'] += pa_result == 'skipped'
-        stats['pa']['failed'] += pa_result == 'failed'
+                                       pa_alias, force, clip_doi_value, doi_memo, pa_keys)
+        stats['pa'][pa_result] += 1
         any_changed |= pa_result == 'matched'
         pa_stem = pa_path.stem if pa_path else extract_wikilink_name(fm.get('paper-analyze'))
         if pa_stem:
@@ -334,10 +368,8 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
             if pa_stem in trash_pa_source:
                 trash_reclaims[pa_stem] = base.name
 
-        fe_result, fe_path = _match_fe(clip_md, fm, fe_index, fe_reverse, force)
-        stats['fe']['matched'] += fe_result == 'matched'
-        stats['fe']['skipped'] += fe_result == 'skipped'
-        stats['fe']['failed'] += fe_result == 'failed'
+        fe_result, fe_path = _match_fe(clip_md, fm, fe_index, fe_reverse, force, fe_keys)
+        stats['fe'][fe_result] += 1
         any_changed |= fe_result == 'matched'
         fe_stem = fe_path.stem if fe_path else extract_wikilink_name(fm.get('figure-extractor'))
         if fe_stem:
@@ -370,9 +402,7 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
         vault_name = base.name
         trash_target = TRASH_CLAUDE / vault_name
         for md in sorted(vault_claude_dir.rglob('*.md')):
-            if md.stem in matched_stems or 'zh-CN' in md.stem:
-                continue
-            if md.stem.endswith('_figures'):
+            if md.stem in matched_stems or classify_claude_stem(md.stem) != 'pa':
                 continue
             rel = md.relative_to(vault_claude_dir)
             dest = trash_target / rel.parent

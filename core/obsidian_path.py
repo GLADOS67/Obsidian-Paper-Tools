@@ -33,11 +33,16 @@ def _fuzzy_search(dir_path: Path, stem_raw: str) -> Optional[Path]:
         return None
     stem_lower = stem_raw.lower()
     safe_stem = _GLOB_ESCAPE_RE.sub(r'[\1]', stem_raw)
+    la = len(stem_lower)
     best, best_mtime = None, 0.0
     try:
         for p in dir_path.glob(f'{safe_stem}*.md'):
             p_stem_lower = p.stem.lower()
             if p_stem_lower != stem_lower:
+                # ratio ≤ 2·min(a,b)/(a+b) < SM_QUICK 的候选直接跳过，避免构造 SequenceMatcher
+                lb = len(p_stem_lower)
+                if 2.0 * min(la, lb) < SM_QUICK * (la + lb):
+                    continue
                 sm = SequenceMatcher(None, stem_lower, p_stem_lower)
                 if sm.quick_ratio() < SM_QUICK or sm.ratio() < SM_QUICK:
                     continue

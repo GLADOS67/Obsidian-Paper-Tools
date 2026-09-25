@@ -141,15 +141,27 @@ def _fetch_metadata(items):
     return results
 
 
-def _match_one(results, kind, val):
+def _build_result_index(results):
+    """全循环构建一次的查询索引：pmid/doi 首命中映射（setdefault 保序）+ 预小写标题列表。"""
+    by_pmid, by_doi, titles = {}, {}, []
+    for r in results:
+        by_pmid.setdefault(r.get('id'), r)
+        if doi := r.get('doi'):
+            by_doi.setdefault(doi.lower(), r)
+        titles.append(((r.get('title') or '').lower(), r))
+    return by_pmid, by_doi, titles
+
+
+def _match_one(index, kind, val):
+    by_pmid, by_doi, titles = index
     lv = val.lower()
     if kind == 'pmid':
-        return next((r for r in results if r.get('id') == val), None)
+        return by_pmid.get(val)
     if kind == 'doi':
-        return next((r for r in results if r.get('doi', '').lower() == lv), None)
+        return by_doi.get(lv)
     best, best_score = None, 0.0
-    for r in results:
-        score = SequenceMatcher(None, (r.get('title') or '').lower(), lv).ratio()
+    for title_lower, r in titles:
+        score = SequenceMatcher(None, title_lower, lv).ratio()
         if score > best_score:
             best, best_score = r, score
     return best if best_score >= _TITLE_SIM else None
@@ -416,9 +428,10 @@ def run_pmce(input_arg, path, no_graph=False, dry_run=False):
 
     results = _fetch_metadata(items)
     print(f'EuropePMC返回 {len(results)} 条元数据')
+    result_index = _build_result_index(results)
     jobs, non_oa, seen_ids = [], [], set()
     for kind, val in items:
-        meta = _match_one(results, kind, val)
+        meta = _match_one(result_index, kind, val)
         if meta is None:
             print(f'未匹配: [{kind}] {val[:60]}')
             continue

@@ -6,7 +6,8 @@ from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Tuple
 
 from core.cache import load_cache, save_cache
-from core.doi import CANONICAL_CHAR_TABLE, PDF_ARTIFACTS, is_plausible_doi, process_doi
+from core.doi import TITLE_NORM_TABLE, is_plausible_doi, process_doi
+from core.frontmatter import apply_cited_by, cited_by_fresh
 from core.http import get_session, polite_sleep
 
 from config import CITE_BY_CACHE, CROSSREF_MAILTO, DOI_TITLE_CACHE
@@ -14,6 +15,7 @@ CROSSREF_API_BASE = 'https://api.crossref.org/works'
 
 _LOCK = threading.Lock()
 _TITLE_REVERSE: Dict[str, str] = {}
+_TITLE_LENS: Dict[str, int] = {}  # 与 _TITLE_REVERSE 同步维护，用于模糊匹配长度上界预剪枝
 _FUZZY_THRESHOLD = 0.95
 
 _http = get_session()
@@ -41,12 +43,20 @@ def save_cite_by_cache(cache: dict) -> None:
 
 def _norm_title(text: str) -> str:
     """标题规范化：PDF伪影清理 + Unicode引号/破折号统一 + 小写 + 空格/下划线折叠 + 去尾标点。"""
-    return re.sub(r'\s+', ' ', text.translate(PDF_ARTIFACTS).translate(CANONICAL_CHAR_TABLE)
+    return re.sub(r'\s+', ' ', text.translate(TITLE_NORM_TABLE)
                   .lower().replace('_', ' ')).strip().rstrip(' .;:')
+
+
+def _index_title(key: str, doi: str) -> None:
+    """setdefault 语义写入标题→DOI 索引，同步记录长度（不覆盖已有项）。"""
+    if key not in _TITLE_REVERSE:
+        _TITLE_REVERSE[key] = doi
+        _TITLE_LENS[key] = len(key)
 
 
 def _rebuild_title_reverse(cache: dict) -> None:
     _TITLE_REVERSE.clear()
+    _TITLE_LENS.clear()
     for doi, val in cache.items():
         if isinstance(val, list) and val:
             title = val[0] if isinstance(val[0], str) else ''
@@ -56,8 +66,8 @@ def _rebuild_title_reverse(cache: dict) -> None:
         else:
             continue
         if title:
-            _TITLE_REVERSE.setdefault(norm or _norm_title(title), doi)
-            _TITLE_REVERSE.setdefault(title.lower(), doi)
+            _index_title(norm or _norm_title(title), doi)
+            _index_title(title.lower(), doi)
 
 
 def put_doi_title(cache: dict, doi: str, title: str, lock: threading.Lock = None) -> None:
@@ -72,6 +82,10 @@ def put_doi_title(cache: dict, doi: str, title: str, lock: threading.Lock = None
         print(f'⚠️ 拒绝写入可疑DOI: {doi} {title[:40]}')
         return
     title = (title or '').strip()
+    # 标题含 wikilink 包裹（[[...]]）是历史遗留格式，非真实标题，拒绝写入缓存
+    if '[' in title or ']' in title:
+        print(f'⚠️ 拒绝写入wikilink格式标题: {doi} {title[:40]}')
+        return
     with lock or _LOCK:
         val = cache.get(doi)
         if isinstance(val, list) and val:
@@ -91,8 +105,8 @@ def put_doi_title(cache: dict, doi: str, title: str, lock: threading.Lock = None
         t = cur[0] if isinstance(cur, list) and cur else ''
         if t:
             n = cur[1] if isinstance(cur, list) and len(cur) >= 2 and isinstance(cur[1], str) else ''
-            _TITLE_REVERSE.setdefault(n or _norm_title(t), doi)
-            _TITLE_REVERSE.setdefault(t.lower(), doi)
+            _index_title(n or _norm_title(t), doi)
+            _index_title(t.lower(), doi)
 
 
 def lookup_doi_by_title(title: str, cache: dict = None,
@@ -107,12 +121,16 @@ def lookup_doi_by_title(title: str, cache: dict = None,
         if hit := _TITLE_REVERSE.get(norm):
             return hit
         if len(norm) >= 20:
+            # ratio ≤ quick_ratio ≤ 2·min(a,b)/(a+b)，长度越界候选必低于阈值，直接跳过
+            ln, t = len(norm), _FUZZY_THRESHOLD
+            lo, hi = ln * t / (2.0 - t), ln * (2.0 - t) / t
             best, best_score = None, 0.0
             for cand, doi in _TITLE_REVERSE.items():
-                if len(cand) < 10:
+                lc = _TITLE_LENS[cand]
+                if lc < 10 or lc < lo or lc > hi:
                     continue
                 sm = SequenceMatcher(None, norm, cand)
-                if sm.quick_ratio() < _FUZZY_THRESHOLD:
+                if sm.quick_ratio() < t:
                     continue
                 score = sm.ratio()
                 if score > best_score:
@@ -279,3 +297,18 @@ def get_cited_by_pubmed(doi: str, cite_by_cache: dict = None,
                 citing.append((pubdate, process_doi(doi_val)[0]))
     citing.sort(key=lambda x: x[0], reverse=True)
     return _finalize([d for _, d in citing])
+
+
+def refresh_cited_by(fm: dict, main_doi: str, cite_by_cache: dict,
+                     doi_title_cache: dict, existing_dois: set = None,
+                     max_rows: int = 10) -> Optional[List[str]]:
+    """cited_by_date 未过期则跳过（返回 None）；否则查 PubMed 并写回 fm，返回新增 DOI 列表。
+
+    合并 cited_by.py / pdf2md.py 中重复的「新鲜度检查 → 查询 → apply_cited_by」逻辑。
+    """
+    if not main_doi or cited_by_fresh(fm):
+        return None
+    _, citing_dois = get_cited_by_pubmed(main_doi, cite_by_cache, doi_title_cache,
+                                         existing_dois, max_rows)
+    apply_cited_by(fm, citing_dois)
+    return citing_dois

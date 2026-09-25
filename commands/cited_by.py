@@ -3,12 +3,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
-from core.crossref_api import (get_cited_by_pubmed, load_cite_by_cache,
-                               load_doi_title_cache, save_cite_by_cache,
+from core.crossref_api import (load_cite_by_cache, load_doi_title_cache,
+                               refresh_cited_by, save_cite_by_cache,
                                save_doi_title_cache)
 from core.doi import PATTERN_DOI, get_main_doi, process_doi
 from core.frontmatter import (
-    apply_cited_by, build_doi_set, cited_by_fresh, dump_frontmatter,
+    build_doi_set, cited_by_fresh, dump_frontmatter,
     parse_frontmatter_str,
 )
 from core.obsidian_path import resolve_input_path
@@ -45,10 +45,8 @@ def _process_cited_file(md_file: Path, cite_by_cache: dict, doi_title_cache: dic
         return
 
     with lock:
-        count, citing_dois = get_cited_by_pubmed(main_doi, cite_by_cache,
-                                                 doi_title_cache, existing, max_rows)
-    apply_cited_by(fm, citing_dois)
-    with lock:
+        citing_dois = refresh_cited_by(fm, main_doi, cite_by_cache,
+                                       doi_title_cache, existing, max_rows) or []
         existing.update(d.lower() for d in citing_dois)
     print(f'[OK] {md_file.name}: cited_by_date={fm["cited_by_date"]}  新增 {len(citing_dois)} 篇')
 

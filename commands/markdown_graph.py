@@ -12,7 +12,7 @@ from core.doi import (PATTERN_DOI, PATTERN_SAFE_DOI, find_plausible_dois,
                       repair_doi_text)
 from core.frontmatter import (dump_frontmatter, parse_frontmatter_batch,
                               parse_frontmatter_str)
-from core.markdown_utils import H1_RE, clean_markdown_body
+from core.markdown_utils import clean_markdown_body
 from core.refs import split_wikilink, wikilink_doi
 
 DoiEntry = List  # [[ref_spec, ref_stems_dict], [cb_spec, cb_stems_dict]]
@@ -97,15 +97,9 @@ def _resolve_self_doi(file_stem: str, refs: List[str],
     if not refs:
         return None
     for ref in refs:
-        if (p := split_wikilink(ref)) and p[0].strip() == file_stem:
+        if (p := split_wikilink(ref)) and ' '.join(p[0].split()) == file_stem:
             if m := PATTERN_DOI.search(p[1]):
                 return process_doi(m.group(0))[0]
-    first = refs[0]
-    inner = first[2:-2] if first.startswith('[[') and first.endswith(']]') else first
-    doi_part = inner.partition('|')[2] or inner
-    m = PATTERN_DOI.search(doi_part)
-    if m:
-        return process_doi(m.group(0))[0]
     if doi_title_cache and (doi := lookup_doi_by_title(file_stem, doi_title_cache)):
         return process_doi(doi)[0]
     return None
@@ -181,10 +175,19 @@ def _build_maps_from_fms(md_files, fms, unique_map, cited_by_map):
                 _update_doi_map(disp, name, unique_map, f.stem, slot=1)
 
 
-def _collect_stats_maps(md_files: List[Path]) -> Tuple[Dict[str, DoiEntry], Dict[str, Tuple[str, List[str]]]]:
+def _collect_stats_maps(md_files: List[Path],
+                        preloaded: Optional[Dict[Path, Dict]] = None
+                        ) -> Tuple[Dict[str, DoiEntry], Dict[str, Tuple[str, List[str]]]]:
+    """收集目录统计图谱；preloaded 提供 {文件: 内存中最新fm}（主流程写盘成功者），避免重复读盘。
+
+    未命中 preloaded 的文件（如写盘失败）仍从磁盘批量解析，与原行为一致。
+    """
     unique_map: Dict[str, DoiEntry] = {}
     cited_by_map: Dict[str, Tuple[str, List[str]]] = {}
-    fms = parse_frontmatter_batch(md_files, fm_only=True)
+    preloaded = preloaded or {}
+    reload_files = [f for f in md_files if f not in preloaded]
+    reloaded = dict(zip(reload_files, parse_frontmatter_batch(reload_files, fm_only=True)))
+    fms = [preloaded.get(f, reloaded.get(f)) for f in md_files]
     _build_maps_from_fms(md_files, fms, unique_map, cited_by_map)
     return unique_map, cited_by_map
 
@@ -231,27 +234,30 @@ def run_markdown_graph(directory: str, depth: int = 0) -> None:
     print(f'\n已收集到 {len(unique_map)} 个全局DOI标题映射')
     print('\n开始计算引用关系和引用情况并保存文件...')
 
+    written_fms: Dict[Path, Dict] = {}  # 写盘成功的最新 fm，供 depth 统计复用（免重复读盘）
     for file, fm, rest in files_data:
-        refs, _ = _rebuild_reference_list(fm.get('reference', []), unique_map)
+        raw_refs = fm.get('reference', [])  # 原始引用（重建会替换name，破坏name==stem匹配），self_doi 优先用它解析
+        refs, _ = _rebuild_reference_list(raw_refs, unique_map)
         fm['reference'] = refs
         if fm.get('cited_by'):
             fm['cited_by'] = _resolve_cited_by(fm['cited_by'], unique_map)
-        self_doi = _resolve_self_doi(file.stem, refs, doi_title_cache)
+        self_doi = _resolve_self_doi(file.stem, raw_refs, doi_title_cache)
         key = self_doi.lower() if self_doi else None
         citing_stems = list(unique_map[key][0][1]) if (key and key in unique_map) else []
         citing_stems = [s for s in citing_stems if s != file.stem]
         fm['被引'] = [f'[[{s}]]' for s in citing_stems]
         fm['tags'] = ['正向' if (len(citing_stems) - fm.get('特殊引用数', 0)) > 0 else '负向']
         fm.pop('引用情况', None)
-        if self_doi and is_plausible_doi(self_doi):
-            title = fm.get('title')
-            if isinstance(title, list):
-                title = ' '.join(str(t) for t in title)
-            if not (isinstance(title, str) and title.strip()):
-                m = H1_RE.search(rest)
-                title = m.group(1).strip() if m else None
-            if title:
-                put_doi_title(doi_title_cache, self_doi, title)
+        title = fm.get('title')
+        if isinstance(title, list):
+            title = ' '.join(str(t) for t in title)
+        title = str(title).strip() if title else ''
+        # 空标题或 wikilink 包裹的标题（历史遗留 [[...]] 格式）视为无效，回退文件地址（文件名即标题）
+        if not title or '[' in title or ']' in title:
+            title = file.stem
+            fm['title'] = title
+        if self_doi and is_plausible_doi(self_doi) and title:
+            put_doi_title(doi_title_cache, self_doi, title)
             for ref in refs:
                 if ref_doi := wikilink_doi(ref):
                     if ref_doi.lower() == key or not is_plausible_doi(ref_doi):
@@ -261,6 +267,7 @@ def run_markdown_graph(directory: str, depth: int = 0) -> None:
                         citing.append(self_doi)
         try:
             file.write_text(dump_frontmatter(fm, rest), encoding='utf-8')
+            written_fms[file] = fm
             print(f'  ✅ {file.name} 更新完成：被引={len(citing_stems)}篇，标签={fm["tags"][0]}')
         except Exception as e:
             print(f'  ❌ {file.name} 保存失败 → {str(e)}')
@@ -278,7 +285,7 @@ def run_markdown_graph(directory: str, depth: int = 0) -> None:
                 md_files = sorted(folder.rglob('*.md'))
                 if not md_files:
                     continue
-                unique_map, cited_by_map = _collect_stats_maps(md_files)
+                unique_map, cited_by_map = _collect_stats_maps(md_files, written_fms)
                 print(f'\n📁 {folder.name}')
                 _print_top_orphans(unique_map, cited_by_map)
 

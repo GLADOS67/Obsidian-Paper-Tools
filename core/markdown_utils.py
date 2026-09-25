@@ -13,7 +13,6 @@ COMBINED_LINK_PATTERN = re.compile(
 )
 PATTERN_BRACKET_LINKS = re.compile(r'((?<!!)\[(?!!)[^\]]+\]\([^)]+\)|\[\[[^\]]+\]\])')
 ARTIFACT_TAGS = re.compile(r'</?(?:lcel|nl)>', re.IGNORECASE)
-H1_RE = re.compile(r'^#\s+(.+)$', re.MULTILINE)
 
 
 def _fix_img(m: re.Match) -> str:

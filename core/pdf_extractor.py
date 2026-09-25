@@ -79,18 +79,15 @@ def table_to_md(table):
     if not data:
         return ''
     max_cols = max(len(row) for row in data)
-    has_content = False
-    lines = []
+    has_content, lines = False, []
     for row in data:
         cells = [str(c).replace('\n', ' ').strip() if c else '' for c in row]
         cells += [''] * (max_cols - len(row))
-        if not has_content:
-            has_content = any(cells)
+        has_content = has_content or any(cells)
         lines.append('| ' + ' | '.join(cells) + ' |')
     if not has_content:
         return ''
-    separator = '| ' + ' | '.join(['---'] * max_cols) + ' |'
-    lines.insert(1, separator)
+    lines.insert(1, '| ' + ' | '.join(['---'] * max_cols) + ' |')
     return '\n'.join(lines) + '\n'
 
 

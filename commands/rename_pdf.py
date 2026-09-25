@@ -46,15 +46,18 @@ STATUS_SET = frozenset(STATUS_MARKERS)
 ET_AL_RE = re.compile(r',?\s+et\s+al\.?\s*$', re.IGNORECASE)
 WS_RE = re.compile(r'\s+')
 _FILENAME_STRIP_TABLE = str.maketrans({c: '' for c in r'<>:"/\|?*'})
+# CANONICAL规范化 + 文件名字符删除 二合一单趟 translate（键集不相交，替换输出不含被删字符）
+_SANITIZE_TABLE = {**CANONICAL_CHAR_TABLE, **_FILENAME_STRIP_TABLE}
+
+
+_JUNK_PREFIXES = tuple(j for j in JUNK_TITLES if len(j) >= 5)
 
 
 def _is_title_junk(title):
     if not title or len(title) < 5:
         return True
     tlower = title.lower()
-    if tlower in JUNK_TITLES:
-        return True
-    if any(tlower.startswith(j) for j in JUNK_TITLES if len(j) >= 5):
+    if tlower in JUNK_TITLES or tlower.startswith(_JUNK_PREFIXES):
         return True
     words = title.split()
     n_words = len(words)
@@ -167,8 +170,7 @@ def _extract_from_flat_page(spans, page_h):
 
 
 def _sanitize_filename(title):
-    title = title.translate(CANONICAL_CHAR_TABLE).replace('\n', ' ').replace('\r', ' ')
-    title = title.translate(_FILENAME_STRIP_TABLE)
+    title = title.translate(_SANITIZE_TABLE).replace('\n', ' ').replace('\r', ' ')
     title = ' '.join(title.split())
     if len(title) > 250:
         cut = title[:251].rfind(' ')

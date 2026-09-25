@@ -10,6 +10,7 @@ from core import iter_vault_dirs
 from core.cache import read_text_safe
 from core.frontmatter import parse_frontmatter_batch
 from core.refs import (
+    classify_claude_stem,
     parse_h1_wikilink, extract_wikilink_name,
     first_ref_target, norm_stems, pa_stem_variants,
 )
@@ -97,8 +98,7 @@ def run_reconcile(vault_root: str = r'C:\Vault',
 
         if claude_dir.is_dir():
             claude_mds = sorted(claude_dir.glob('*.md'))
-            pa_mds = [md for md in claude_mds
-                      if 'zh-CN' not in md.stem and not md.stem.endswith('_figures')]
+            pa_mds = [md for md in claude_mds if classify_claude_stem(md.stem) == 'pa']
 
             def _resolve_pa(md: Path) -> Optional[str]:
                 parsed = parse_h1_wikilink(read_text_safe(md))
@@ -108,9 +108,10 @@ def run_reconcile(vault_root: str = r'C:\Vault',
                 pa_targets = dict(zip(pa_mds, ex.map(_resolve_pa, pa_mds)))
             for md in claude_mds:
                 stem = md.stem
-                if 'zh-CN' in stem:
+                kind = classify_claude_stem(stem)
+                if kind == 'zh':
                     continue
-                if stem.endswith('_figures'):
+                if kind == 'fe':
                     fe_info[f'{vname}/{stem[:-8]}'] = (md, vname, stem[:-8])
                     continue
                 force_keep = bool(_CITATION_RE.search(stem))
@@ -153,8 +154,7 @@ def run_reconcile(vault_root: str = r'C:\Vault',
                 break
 
         if pa_entry:
-            action = pa_entry[2]
-            fe_action[fe_key] = (fe_path, fvname, action if ':' in action else action)
+            fe_action[fe_key] = (fe_path, fvname, pa_entry[2])
         else:
             fe_action[fe_key] = (fe_path, fvname, 'trash')
 

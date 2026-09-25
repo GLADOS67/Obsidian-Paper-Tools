@@ -90,8 +90,5 @@ def build_doi_set(md_dir: Path, include_refs: bool = False) -> set:
                         dois.add(m.group(0).lower())
         return dois
 
-    existing = set()
     with ThreadPoolExecutor() as ex:
-        for dois in ex.map(_collect, md_dir.rglob('*.md')):
-            existing.update(dois)
-    return existing
+        return set().union(*ex.map(_collect, md_dir.rglob('*.md')))

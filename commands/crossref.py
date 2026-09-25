@@ -9,7 +9,6 @@ from core.crossref_api import (fetch_references, get_doi_from_citation,
 from core.doi import (PATTERN_DOI, extract_doi_from_frontmatter,
                        get_main_doi, process_doi, repair_doi_text)
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
-from core.markdown_utils import H1_RE
 from core.obsidian_path import resolve_input_path, SM_QUICK
 from core.pdf_extractor import extract_first_doi_from_pdf
 from core.refs import new_doi_wikilinks, process_existing_references, split_wikilink
@@ -23,14 +22,6 @@ _USAGE_MSG = (
     '3. local:文件路径 [doi:目标DOI] （处理本地参考文献，可指定主DOI）\n'
     '4. doi:DOI号（拉取DOI的参考文献并导入到指定笔记）'
 )
-
-_NON_TITLE_RE = re.compile(
-    r'^(authors?|abstract|introduction|methods?|results?|discussions?|'
-    r'conclusions?|references?|background|keywords?|acknowledg?ments?|'
-    r'summary|materials?|supplementary|appendix)[\s:：]',
-    re.IGNORECASE,
-)
-
 
 def _build_ref_list(md_stem: str, main_doi: Optional[str], references: List[Dict],
                     existing_refs: Optional[List[str]] = None) -> List[str]:
@@ -67,13 +58,15 @@ def _get_main_doi(pdf_path: Optional[Path], content: Optional[str], fm: Optional
     return get_main_doi(fm or {}, content or '')
 
 
-def _get_md_title(content: Optional[str], fm_data: Optional[dict], fallback_stem: str) -> str:
-    if content:
-        stripped = [h.strip() for h in H1_RE.findall(content)]
-        if stripped:
-            return next((h for h in stripped if not _NON_TITLE_RE.match(h)), stripped[0])
-    if fm_data and fm_data.get('title'):
-        return fm_data['title']
+def _get_md_title(fm_data, fallback_stem):
+    if fm_data:
+        title = fm_data.get('title')
+        if isinstance(title, list):
+            title = ' '.join(str(t) for t in title)
+        title = str(title).strip() if title else ''
+        # wikilink 包裹标题（[[...]]）视为无效，回退文件地址（文件名即标题）
+        if title and '[' not in title and ']' not in title:
+            return title
     return fallback_stem
 
 
@@ -119,12 +112,13 @@ def process_file(file_path: Path, cache: dict) -> None:
         return
     print(f'处理{"Markdown" if suffix == ".md" else "PDF"}: {file_path}')
     pdf_path = file_path if suffix == '.pdf' else None
+    stem = file_path.stem
+    md_title = ''  # 惰性计算的 _get_md_title 结果
     main_doi = _get_main_doi(pdf_path, content, fm_data)
     if not main_doi:
         print('未提取到 DOI，尝试标题搜索...')
-        stem = file_path.stem
-        main_doi = _resolve_doi_by_title(fm_data.get('title', stem),
-                                         _get_md_title(content, fm_data, stem), cache)
+        md_title = _get_md_title(fm_data, stem)
+        main_doi = _resolve_doi_by_title(fm_data.get('title', stem), md_title, cache)
     if not main_doi:
         if suffix == '.md':
             process_local_references_in_md(file_path, cache=cache)
@@ -132,7 +126,7 @@ def process_file(file_path: Path, cache: dict) -> None:
             print('未能匹配论文，操作终止。')
         return
     print(f'目标DOI: {main_doi}')
-    put_doi_title(cache, main_doi, _get_md_title(content, fm_data, file_path.stem))
+    put_doi_title(cache, main_doi, md_title or _get_md_title(fm_data, stem))
     refs, _ = fetch_references(main_doi, cache)
     if suffix == '.md':
         update_md_references(file_path, refs, main_doi)
@@ -219,7 +213,7 @@ def _handle_takeover_mode(file_path: Path, cache: dict) -> None:
     print(f'￥ 接管模式: {file_path}')
     stem = file_path.stem
     title = fm_data.get('title', stem) if suffix == '.md' else stem
-    md_title = _get_md_title(content, fm_data, stem)
+    md_title = _get_md_title(fm_data, stem)
     print(f'使用标题搜索: {title}')
     main_doi = _resolve_doi_by_title(title, md_title, cache)
     if not main_doi:

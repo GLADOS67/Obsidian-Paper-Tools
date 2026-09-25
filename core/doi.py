@@ -39,6 +39,12 @@ CANONICAL_CHAR_TABLE = str.maketrans({
     '\u2014': '-', '\u2015': '-', '\u2212': '-',
     '\u2026': '...',
 })
+_PDF_ARTIFACT_CHARS = '\u200b\u200c\u200d\ufeff\u00ad\u200e\u200f\u2028\u2029'
+# PDF伪影删除 + Unicode规范化 二合一单趟 translate（两表字符集不相交，结果与两次translate一致）
+TITLE_NORM_TABLE = str.maketrans({**{ord(c): None for c in _PDF_ARTIFACT_CHARS},
+                                  **CANONICAL_CHAR_TABLE})
+
+
 def repair_doi_text(text: str) -> str:
     text = text.translate(PDF_ARTIFACTS)
     text = PATTERN_DOI_SPLICE.sub('', text)

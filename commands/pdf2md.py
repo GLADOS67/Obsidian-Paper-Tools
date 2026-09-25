@@ -12,15 +12,15 @@ from pathlib import Path
 
 from requests.exceptions import JSONDecodeError
 
-from core.crossref_api import (fetch_references, get_cited_by_pubmed,
-                               get_doi_from_citation, load_cite_by_cache,
-                               load_doi_title_cache, lookup_doi_by_title,
-                               put_doi_title, save_cite_by_cache,
+from core.crossref_api import (fetch_references, get_doi_from_citation,
+                               load_cite_by_cache, load_doi_title_cache,
+                               lookup_doi_by_title, put_doi_title,
+                               refresh_cited_by, save_cite_by_cache,
                                save_doi_title_cache)
 from core.doi import (find_plausible_dois, get_main_doi,
                        normalize_unicode_dashes, process_doi, repair_doi_text)
-from core.frontmatter import (apply_cited_by, build_doi_set, cited_by_fresh,
-                               dump_frontmatter, parse_frontmatter_str)
+from core.frontmatter import (build_doi_set, dump_frontmatter,
+                               parse_frontmatter_str)
 from core.http import get_session
 from core.markdown_utils import clean_markdown_body
 from core.refs import build_existing_dois, canonicalize_stem, new_doi_wikilinks, process_existing_references
@@ -182,10 +182,8 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, doi_title_c
     if enable_cited_by and main_doi:
         if clippings_doi_set is None:
             clippings_doi_set = build_doi_set(md_dst.parent)
-        if not cited_by_fresh(fm):
-            _, citing_dois = get_cited_by_pubmed(main_doi, cite_by_cache, doi_title_cache,
-                                                 clippings_doi_set, cited_by_max)
-            apply_cited_by(fm, citing_dois)
+        refresh_cited_by(fm, main_doi, cite_by_cache, doi_title_cache,
+                         clippings_doi_set, cited_by_max)
 
     existing_refs = fm.get('reference', [])
     if existing_refs:
@@ -440,10 +438,10 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
     pdf_files = sorted({f.absolute() for f in pp.rglob('*.pdf') if '完成' not in f.name})
     filtered = []
     global_index = {}
-    for vault_dir in iter_vault_dirs(OBSIDIAN_ROOT):
-        clips = vault_dir / 'Clippings'
-        if clips.is_dir():
-            for md in clips.rglob('*.md'):
+    clip_dirs = [c for v in iter_vault_dirs(OBSIDIAN_ROOT) if (c := v / 'Clippings').is_dir()]
+    with ThreadPoolExecutor() as ex:  # 各 vault Clippings 并行 rglob；map 保序，setdefault 优先级不变
+        for mds in ex.map(lambda c: list(c.rglob('*.md')), clip_dirs):
+            for md in mds:
                 global_index.setdefault(md.stem, md)
     print(f'全库已索引: {len(global_index)} 个MD')
     for pdf_file in pdf_files:

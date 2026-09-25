@@ -43,16 +43,18 @@ def scan_referenced_images(md_files, show_progress: bool = False) -> set:
 
 
 def move_images_to(names, images_dir: Path, trash_dir: Path) -> int:
-    """将 names 中的图片从 images_dir 移入 trash_dir，返回移动成功数。"""
+    """将 names 中的图片从 images_dir 并行移入 trash_dir，返回移动成功数。"""
     trash_dir.mkdir(parents=True, exist_ok=True)
-    moved = 0
-    for name in names:
+
+    def _mv(name) -> int:
         try:
             shutil.move(str(images_dir / name), str(trash_dir / name))
-            moved += 1
+            return 1
         except Exception:
-            pass
-    return moved
+            return 0
+
+    with ThreadPoolExecutor() as ex:
+        return sum(ex.map(_mv, names))
 
 
 def run_clean_images(path_vault=None, path_images=None, path_trash=None):
