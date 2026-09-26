@@ -5,6 +5,7 @@ from typing import Iterable, List, Optional, Tuple
 from core.doi import PATTERN_DOI, CANONICAL_CHAR_TABLE, is_plausible_doi, process_doi
 
 
+@lru_cache(maxsize=None)  # 纯函数；unify_symbols 逐文件、pdf2md 逐PDF 调用
 def canonicalize_stem(stem: str) -> str:
     return stem.translate(CANONICAL_CHAR_TABLE)
 

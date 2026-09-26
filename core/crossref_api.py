@@ -9,14 +9,16 @@ from core.cache import load_cache, save_cache
 from core.doi import TITLE_NORM_TABLE, is_plausible_doi, process_doi
 from core.frontmatter import apply_cited_by, cited_by_fresh
 from core.http import get_session, polite_sleep
+from core.similarity import ratio_gate_passes
 
 from config import CPU_CORES, CITE_BY_CACHE, CROSSREF_MAILTO, DOI_TITLE_CACHE
 CROSSREF_API_BASE = 'https://api.crossref.org/works'
 
 _LOCK = threading.Lock()
-_TITLE_REVERSE: Dict[str, str] = {}
-_TITLE_LENS: Dict[str, int] = {}  # 与 _TITLE_REVERSE 同步维护，用于模糊匹配长度上界预剪枝
+_TITLE_REVERSE: Dict[str, Tuple[str, int]] = {}  # 规范化标题 → (doi, 标题长度)，长度用于模糊匹配上界预剪枝
 _FUZZY_THRESHOLD = 0.95
+_CROSSREF_SIM = 0.5   # Crossref 返回标题 vs 引用文本的最低相似度（与 pmce _TITLE_SIM 一致）
+_EXACT_SIM = 0.9      # lookup 精确命中后 title/norm 一致性下限（防畸形条目）
 
 _http = get_session()
 
@@ -48,15 +50,13 @@ def _norm_title(text: str) -> str:
 
 
 def _index_title(key: str, doi: str) -> None:
-    """setdefault 语义写入标题→DOI 索引，同步记录长度（不覆盖已有项）。"""
+    """setdefault 语义写入标题→(DOI,长度) 索引（不覆盖已有项）。"""
     if key not in _TITLE_REVERSE:
-        _TITLE_REVERSE[key] = doi
-        _TITLE_LENS[key] = len(key)
+        _TITLE_REVERSE[key] = (doi, len(key))
 
 
 def _rebuild_title_reverse(cache: dict) -> None:
     _TITLE_REVERSE.clear()
-    _TITLE_LENS.clear()
     for doi, val in cache.items():
         if isinstance(val, list) and val:
             title = val[0] if isinstance(val[0], str) else ''
@@ -119,18 +119,15 @@ def lookup_doi_by_title(title: str, cache: dict = None,
         return None
     with lock or _LOCK:
         if hit := _TITLE_REVERSE.get(norm):
-            return hit
+            return hit[0]
         if len(norm) >= 20:
             # ratio ≤ quick_ratio ≤ 2·min(a,b)/(a+b)，长度越界候选必低于阈值，直接跳过
-            ln, t = len(norm), _FUZZY_THRESHOLD
-            lo, hi = ln * t / (2.0 - t), ln * (2.0 - t) / t
             best, best_score = None, 0.0
-            for cand, doi in _TITLE_REVERSE.items():
-                lc = _TITLE_LENS[cand]
-                if lc < 10 or lc < lo or lc > hi:
+            for cand, (doi, clen) in _TITLE_REVERSE.items():
+                if clen < 10 or not ratio_gate_passes(len(norm), clen, _FUZZY_THRESHOLD):
                     continue
                 sm = SequenceMatcher(None, norm, cand)
-                if sm.quick_ratio() < t:
+                if sm.quick_ratio() < _FUZZY_THRESHOLD:
                     continue
                 score = sm.ratio()
                 if score > best_score:

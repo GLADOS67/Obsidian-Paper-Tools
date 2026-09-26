@@ -11,7 +11,8 @@ from core.doi import (PATTERN_DOI, extract_doi_from_frontmatter,
 from core.frontmatter import dump_frontmatter, fm_title, parse_frontmatter_str
 from core.obsidian_path import resolve_input_path, SM_QUICK
 from core.pdf_extractor import extract_first_doi_from_pdf
-from core.refs import new_doi_wikilinks, process_existing_references, split_wikilink
+from core.refs import (build_existing_dois, new_doi_wikilinks,
+                       process_existing_references)
 
 RE_REF_ENTRY = re.compile(r'^\s*(?:\[(\d+)\]|(\d+)\.)\s+(.*)$', re.MULTILINE)
 
@@ -26,7 +27,7 @@ _USAGE_MSG = (
 def _build_ref_list(md_stem: str, main_doi: Optional[str], references: List[Dict],
                     existing_refs: Optional[List[str]] = None) -> List[str]:
     final = process_existing_references(existing_refs) if existing_refs is not None else []
-    seen = {p[1].lower() for r in final if (p := split_wikilink(r))}
+    seen = build_existing_dois(final)
     if main_doi:
         md_display, _ = process_doi(main_doi)
         final = [r for r in final if md_display.lower() not in r.lower()]

@@ -4,6 +4,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Optional, Tuple
 
+from core.similarity import ratio_gate_passes
 from config import OBSIDIAN_ROOT
 
 SM_QUICK = 0.7
@@ -39,9 +40,8 @@ def _fuzzy_search(dir_path: Path, stem_raw: str) -> Optional[Path]:
         for p in dir_path.glob(f'{safe_stem}*.md'):
             p_stem_lower = p.stem.lower()
             if p_stem_lower != stem_lower:
-                # ratio ≤ 2·min(a,b)/(a+b) < SM_QUICK 的候选直接跳过，避免构造 SequenceMatcher
-                lb = len(p_stem_lower)
-                if 2.0 * min(la, lb) < SM_QUICK * (la + lb):
+                # ratio ≤ quick_ratio ≤ 2·min(a,b)/(a+b)，长度越界候选必低于阈值，免构造 SequenceMatcher
+                if not ratio_gate_passes(la, len(p_stem_lower), SM_QUICK):
                     continue
                 sm = SequenceMatcher(None, stem_lower, p_stem_lower)
                 if sm.quick_ratio() < SM_QUICK or sm.ratio() < SM_QUICK:

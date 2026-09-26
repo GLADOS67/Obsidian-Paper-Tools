@@ -15,6 +15,7 @@ from core.refs import (
     parse_h1_wikilink, extract_wikilink_name, first_ref_target,
     extract_doi_set,
 )
+from core.similarity import ratio_gate_passes
 from config import OBSIDIAN_ROOT
 
 JACCARD_THRESHOLD = 0.85
@@ -51,8 +52,7 @@ def _fuzzy_best(stem_lower: str, candidates: List[Tuple[str, Path]],
     la, gate = len(stem_lower), threshold * 0.9
     best, best_score = None, 0.0
     for cand_lower, cand_path in candidates:
-        lb = len(cand_lower)
-        if 2.0 * min(la, lb) < gate * (la + lb):
+        if not ratio_gate_passes(la, len(cand_lower), gate):
             continue
         sm = SequenceMatcher(None, stem_lower, cand_lower)
         if sm.quick_ratio() < gate:
@@ -61,6 +61,23 @@ def _fuzzy_best(stem_lower: str, candidates: List[Tuple[str, Path]],
         if score > best_score:
             best_score, best = score, cand_path
     return (best, best_score) if best and best_score >= threshold else None
+
+
+def _index_pa_note(md: Path, text: str, pa_index: Dict[str, Path],
+                   pa_reverse: Dict[str, Tuple[Path, str]],
+                   pa_text: Dict[str, str]) -> Optional[str]:
+    """登记 PA 笔记：正向索引 + 小写正文 + H1 wikilink 反查（vault Claude 与 TRASH 扫描共用）。
+
+    返回 H1 wikilink 的中文标题（无 H1 则 None）。
+    """
+    stem = md.stem
+    pa_index[stem] = md
+    pa_text[stem] = text.lower()
+    if h1_info := parse_h1_wikilink(text):
+        pa_reverse[h1_info[0]] = (md, h1_info[1])
+        pa_reverse[h1_info[0].replace('_', ' ')] = (md, h1_info[1])
+        return h1_info[1]
+    return None
 
 
 def _find_pa(clip_stem: str, pa_index: Dict[str, Path],
@@ -181,6 +198,40 @@ def _find_chi(clip_md: Path, fm: dict, chi_reverse: Dict[str, Tuple[Path, str]],
     return (chi_path, None, 'jaccard', score) if score >= threshold else (None, None, '', score)
 
 
+def _match_pt(clip_md: Path, fm: dict, force: bool, threshold: float, verbose: bool,
+              chi_reverse: Dict[str, Tuple[Path, str]], by_source: Dict[str, Path],
+              by_first_ref: Dict[str, Path], chi_doi_sets: Dict[Path, set],
+              chi_display: Dict[Path, str], chi_by_doi: Dict[str, List[Path]],
+              methods_stats: Dict[str, int]) -> str:
+    """定位 Chi 笔记并写入 paper-translate（与 _match_pa/_match_fe 同构）。"""
+    existing = fm.get('paper-translate')
+    if existing and not force:
+        return 'skipped'
+    chi_path, chi_alias, method, score = _find_chi(
+        clip_md, fm, chi_reverse, by_source, by_first_ref, chi_doi_sets,
+        threshold, chi_by_doi)
+    unchanged = (chi_path and existing
+                 and (m := LINK_TARGET_RE.search(str(existing)))
+                 and m.group(1).strip() == chi_path.stem)
+    if unchanged or (existing and not chi_path):
+        return 'skipped'
+    if not chi_path:
+        if verbose:
+            clip_dois = extract_doi_set(fm.get('reference', []))
+            print(f'[PT] FAIL: {clip_md.name}')
+            for cand_p, cand_s in sorted(
+                ((p, _jaccard(clip_dois, d)) for p, d in chi_doi_sets.items()),
+                key=lambda x: x[1], reverse=True
+            )[:3]:
+                print(f'  jaccard={cand_s:.3f}  {cand_p.name}')
+        return 'failed'
+    display = chi_alias or chi_display.get(chi_path) or chi_path.stem
+    fm['paper-translate'] = f'[[{chi_path.stem}|{display}]]'
+    methods_stats[method] += 1
+    print(f'[PT] {method:10s} (conf={score:.2f})  {clip_md.name} -> {chi_path.name}')
+    return 'matched'
+
+
 def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_THRESHOLD,
               force: bool = False, verbose: bool = False,
               reconcile_claude: bool = False) -> bool:
@@ -251,20 +302,11 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
             if kind == 'fe':
                 fe_index[stem[:-8]] = md
                 continue
-            pa_index[stem] = md
-            pa_text[stem] = text.lower()
-            if h1_info := parse_h1_wikilink(text):
-                clip_stem, ch_title = h1_info
-                pa_reverse[clip_stem] = (md, ch_title)
-                pa_reverse[clip_stem.replace('_', ' ')] = (md, ch_title)
-                ch = ch_title
-            else:
-                ch = None
-                for line in text.split('\n'):
-                    stripped = line.lstrip('#').strip()
-                    if stripped and any('一' <= c <= '鿿' for c in stripped):
-                        ch = stripped
-                        break
+            ch = _index_pa_note(md, text, pa_index, pa_reverse, pa_text)
+            if ch is None:
+                ch = next((s for line in text.split('\n')
+                           if (s := line.lstrip('#').strip())
+                           and any('一' <= c <= '鿿' for c in s)), None)
             if ch:
                 pa_alias[stem] = ch
 
@@ -296,11 +338,7 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
                     trash_fe_source[stem[:-8]] = md
                 continue
             if stem not in pa_index:
-                pa_index[stem] = md
-                pa_text[stem] = text.lower()
-                if h1_info := parse_h1_wikilink(text):
-                    pa_reverse[h1_info[0]] = (md, h1_info[1])
-                    pa_reverse[h1_info[0].replace('_', ' ')] = (md, h1_info[1])
+                _index_pa_note(md, text, pa_index, pa_reverse, pa_text)
                 trash_pa_source[stem] = md
         print(f'TRASH: {len(trash_pa_source)} PA, {len(trash_fe_source)} FE scanned\n')
 
@@ -327,35 +365,11 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
 
         any_changed = False
 
-        existing_pt = fm.get('paper-translate')
-        if existing_pt and not force:
-            stats['pt']['skipped'] += 1
-        else:
-            chi_path, chi_alias, method, score = _find_chi(
-                clip_md, fm, chi_reverse, by_source, by_first_ref, chi_doi_sets,
-                threshold, chi_by_doi)
-            if (chi_path and existing_pt and (m := LINK_TARGET_RE.search(str(existing_pt)))
-                    and m.group(1).strip() == chi_path.stem):
-                stats['pt']['skipped'] += 1
-            elif chi_path:
-                display = chi_alias or chi_display.get(chi_path) or chi_path.stem
-                fm['paper-translate'] = f'[[{chi_path.stem}|{display}]]'
-                stats['pt']['matched'] += 1
-                stats['pt']['methods'][method] += 1
-                any_changed = True
-                print(f'[PT] {method:10s} (conf={score:.2f})  {clip_md.name} -> {chi_path.name}')
-            elif not existing_pt:
-                stats['pt']['failed'] += 1
-                if verbose:
-                    clip_dois = extract_doi_set(fm.get('reference', []))
-                    print(f'[PT] FAIL: {clip_md.name}')
-                    for cand_p, cand_s in sorted(
-                        ((p, _jaccard(clip_dois, d)) for p, d in chi_doi_sets.items()),
-                        key=lambda x: x[1], reverse=True
-                    )[:3]:
-                        print(f'  jaccard={cand_s:.3f}  {cand_p.name}')
-            else:
-                stats['pt']['skipped'] += 1
+        pt_result = _match_pt(clip_md, fm, force, threshold, verbose, chi_reverse,
+                              by_source, by_first_ref, chi_doi_sets, chi_display,
+                              chi_by_doi, stats['pt']['methods'])
+        stats['pt'][pt_result] += 1
+        any_changed |= pt_result == 'matched'
 
         clip_doi_value = _extract_clippings_doi(fm)
         pa_result, pa_path = _match_pa(clip_md, fm, pa_index, pa_reverse, pa_text,

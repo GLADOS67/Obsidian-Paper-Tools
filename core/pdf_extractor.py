@@ -1,14 +1,16 @@
 import multiprocessing
-import queue
 import re
+import threading
 
 import pdfplumber
 
 from core.doi import find_plausible_dois, normalize_unicode_dashes, repair_doi_text
+from config import CPU_CORES
 
 _SENTENCE_END = '.。!！?？:：;；)）]】-—'
 
 _RE_NUMBERED_HEADING = re.compile(r'^[\d.]+\s+\w')
+_RE_BLANK_SPLIT = re.compile(r'\n\s*\n')
 _RE_SECTION_HEADING = re.compile(
     r'^(Abstract|Introduction|Methods?|Results?|Discussion|Conclusion|References?|'
     r'Acknowledgments?|Supplementary|Appendix)',
@@ -20,43 +22,49 @@ _MAX_DOI_LEN = 80
 
 # ── DOI extraction from pdf ──────────────────────────────────────
 
-def _pdf_pages_task(queue, pdf_path):
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def _get_pool():
+    """进程池惰性单例（spawn 上下文）：pdfplumber 需子进程规避主线程句柄泄漏。
+
+    复用的池消除了按 PDF 逐次 spawn 的进程启动开销（每文件省 ~1-2s），
+    超时语义与原先逐次 terminate 一致（get(timeout) 后丢弃结果）。
+    """
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            _pool = multiprocessing.get_context('spawn').Pool(processes=min(CPU_CORES, 4))
+    return _pool
+
+
+def _pdf_pages(pdf_path) -> list:
     with pdfplumber.open(pdf_path) as pdf:
-        queue.put([normalize_unicode_dashes(page.extract_text(x_tolerance=2, y_tolerance=2) or '')
-                    for page in pdf.pages])
+        return [normalize_unicode_dashes(page.extract_text(x_tolerance=2, y_tolerance=2) or '')
+                for page in pdf.pages]
 
 
 def extract_dois_from_pdf(pdf_path, timeout=60):
     if not (pdf_path and pdf_path.exists()):
         return set()
     try:
-        ctx = multiprocessing.get_context('spawn')
-        result_queue = ctx.Queue()
-        p = ctx.Process(target=_pdf_pages_task, args=(result_queue, pdf_path))
-        p.start()
-        p.join(timeout=timeout)
-        if p.is_alive():
-            p.terminate()
-            p.join()
-            print(f'PDF文本提取超时({timeout}s)，跳过 {pdf_path.name}')
-            return set()
-        try:
-            pages = result_queue.get_nowait()
-        except queue.Empty:
-            pages = []
-        p.close()
-        if not pages:
-            return set()
-        return {
-            d
-            for page_text in pages
-            for section in re.split(r'\n\s*\n', page_text)
-            for d in find_plausible_dois(repair_doi_text(section.replace('\n', ' ')))
-            if len(d) <= _MAX_DOI_LEN
-        }
+        pages = _get_pool().apply_async(_pdf_pages, (pdf_path,)).get(timeout=timeout)
+    except TimeoutError:
+        print(f'PDF文本提取超时({timeout}s)，跳过 {pdf_path.name}')
+        return set()
     except Exception as e:
         print(f'从PDF提取DOI失败 {pdf_path.name}: {e}')
-    return set()
+        return set()
+    if not pages:
+        return set()
+    return {
+        d
+        for page_text in pages
+        for section in _RE_BLANK_SPLIT.split(page_text)
+        for d in find_plausible_dois(repair_doi_text(section.replace('\n', ' ')))
+        if len(d) <= _MAX_DOI_LEN
+    }
 
 
 def extract_first_doi_from_pdf(pdf_path):

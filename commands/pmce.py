@@ -26,6 +26,7 @@ from core.doi import (PATTERN_DOI, PATTERN_FS_INVALID, PATTERN_SAFE_DOI,
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.http import get_session, polite_sleep
 from core.refs import pin_main_doi, split_wikilink
+from core.similarity import ratio_gate_passes
 from commands.markdown_graph import run_markdown_graph
 
 EUPMC_BASE = 'https://www.ebi.ac.uk/europepmc/webservices/rest'
@@ -164,8 +165,7 @@ def _match_one(index, kind, val):
     # ratio ≤ 2·min(a,b)/(a+b)，长度越界候选必低于阈值，免构造 SequenceMatcher
     ln, best, best_score = len(lv), None, 0.0
     for title_lower, r in titles:
-        lt = len(title_lower)
-        if 2.0 * min(ln, lt) < _TITLE_SIM * (ln + lt):
+        if not ratio_gate_passes(ln, len(title_lower), _TITLE_SIM):
             continue
         score = SequenceMatcher(None, title_lower, lv).ratio()
         if score > best_score:
@@ -176,26 +176,31 @@ def _match_one(index, kind, val):
 FIG_URL_CACHE = {}
 
 
+def _fetch_pmc_page(pmcid):
+    """依次尝试 requests / curl_cffi 抓取 PMC 页面，均失败返回 None。"""
+    url = f'https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?format=json'
+    for fetch in (lambda: _http.get(url, timeout=30),
+                  lambda: curl_requests.get(url, timeout=30, impersonate='chrome120')):
+        try:
+            r = fetch()
+            if r.status_code == 200:
+                return r.text
+        except Exception:
+            continue
+    return None
+
+
 def _get_figure_urls(pmcid):
     if pmcid in FIG_URL_CACHE:
         return FIG_URL_CACHE[pmcid]
-    try:
-        r = _http.get(f'https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?format=json', timeout=30)
-        if r.status_code != 200:
-            raise ConnectionError(r.status_code)
-    except Exception:
-        try:
-            r = curl_requests.get(f'https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/?format=json',
-                                  timeout=30, impersonate='chrome120')
-            if r.status_code != 200:
-                raise ConnectionError(r.status_code)
-        except Exception:
-            FIG_URL_CACHE[pmcid] = {}
-            return {}
+    text = _fetch_pmc_page(pmcid)
+    if text is None:
+        FIG_URL_CACHE[pmcid] = {}
+        return {}
     pmcid_num = pmcid.replace('PMC', '', 1)
     mapping = {m.group(1): f'https://cdn.ncbi.nlm.nih.gov/pmc/{m.group(0)}'
                for m in re.finditer(r'blobs/[A-Za-z0-9]+/' + re.escape(pmcid_num)
-                                    + r'/[A-Za-z0-9]+/([A-Za-z0-9_.\-]+)', r.text)}
+                                    + r'/[A-Za-z0-9]+/([A-Za-z0-9_.\-]+)', text)}
     FIG_URL_CACHE[pmcid] = mapping
     return mapping
 
@@ -324,6 +329,13 @@ def _table_md(tw):
     return lines
 
 
+def _figure_fallback_link(pmcid, alt):
+    """图片 URL 获取失败时的保底查看链接：label 数字 → PMC figure 页；无数字 → 文章页。"""
+    m = re.search(r'(\d+)', alt)
+    fig_path = f'/figure/F{m.group(1)}/' if m else '/'
+    return f'https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}{fig_path}'
+
+
 def _fig_md(fig, pmcid):
     graphic = next((g for g in fig.iter() if _local(g.tag) == 'graphic'), None)
     href = graphic.get(XLINK) if graphic is not None else None
@@ -331,13 +343,16 @@ def _fig_md(fig, pmcid):
     caption = _first(fig, 'caption')
     alt = _para(label) if label is not None else 'Figure'
     lines = []
-    img_url = None
-    if href:
-        figure_urls = _get_figure_urls(pmcid)
-        img_url = figure_urls.get(href)
-    if img_url:
+    if href and (img_url := _get_figure_urls(pmcid).get(href)):
         lines.append(f'![{alt}]({img_url})')
-    lines.append(f'**{alt}** {_para(caption) if caption is not None else ""}'.rstrip())
+    else:
+        fig_num = re.search(r'(\d+)', alt)
+        anchor = f'#F{fig_num.group(1)}' if fig_num else ''
+        lines.append(f'**[{alt}]({_figure_fallback_link(pmcid, alt)})** '
+                     f'{_para(caption) if caption is not None else ""} '
+                     f'[EuropePMC 全文](https://europepmc.org/article/PMC/{pmcid.replace("PMC", "", 1)}{anchor})'.rstrip())
+        if href:
+            lines.append(f'图片文件: [{href}](https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/bin/{href})')
     if caption is None:
         lines.append('')
     return lines
@@ -429,6 +444,7 @@ def _pin_self_references(written_pairs):
     '特殊引用数' 同步 +1。
     """
     pinned = 0
+    pinned_titles = []
     for meta, target in written_pairs:
         doi = process_doi(meta.get('doi') or '')[0]
         if not doi:
@@ -451,10 +467,12 @@ def _pin_self_references(written_pairs):
         try:
             target.write_text(dump_frontmatter(fm, rest), encoding='utf-8')
             pinned += 1
+            pinned_titles.append(html.unescape(meta.get('title') or '') or target.stem)
         except Exception as e:
             print(f'pin 写盘失败 {target.name}: {e}')
     if pinned:
         print(f'已将 {pinned} 篇的 reference[0] 置为 [[标题|DOI]]')
+        print('\n'.join(f'  {t}' for t in pinned_titles))
 
 
 def run_pmce(input_arg, path, no_graph=False, dry_run=False):

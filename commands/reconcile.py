@@ -72,6 +72,11 @@ def _rel(vault_root: Path, p: Path) -> str:
         return str(p)
 
 
+def _resolve_pa(md: Path) -> Optional[str]:
+    parsed = parse_h1_wikilink(read_text_safe(md))
+    return parsed[0] if parsed else None
+
+
 def run_reconcile(vault_root: str = r'C:\Vault',
                   trash_base: str = r'C:\Vault\TRASH\Claude',
                   dry_run: bool = True) -> bool:
@@ -99,10 +104,6 @@ def run_reconcile(vault_root: str = r'C:\Vault',
         if claude_dir.is_dir():
             claude_mds = sorted(claude_dir.glob('*.md'))
             pa_mds = [md for md in claude_mds if classify_claude_stem(md.stem) == 'pa']
-
-            def _resolve_pa(md: Path) -> Optional[str]:
-                parsed = parse_h1_wikilink(read_text_safe(md))
-                return parsed[0] if parsed else None
 
             with ThreadPoolExecutor() as ex:  # IO并行解析H1，判定保持原顺序串行
                 pa_targets = dict(zip(pa_mds, ex.map(_resolve_pa, pa_mds)))

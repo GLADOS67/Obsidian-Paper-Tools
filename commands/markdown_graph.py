@@ -45,6 +45,17 @@ def _update_doi_map(display_doi: str, name_part: str,
     return entry
 
 
+def _record_cited_by(name_part: str, disp: str, citing_stem: str,
+                     unique_map: Dict[str, DoiEntry],
+                     cited_by_map: Dict[str, Tuple[str, List[str]]]) -> None:
+    """cited_by 条目 → cited_by_map（去重）与 unique_map(slot=1)（进程锁外/内均复用）。"""
+    dl = disp.lower()
+    cited_by_map.setdefault(dl, (disp, []))
+    if citing_stem not in cited_by_map[dl][1]:
+        cited_by_map[dl][1].append(citing_stem)
+    _update_doi_map(disp, name_part, unique_map, citing_stem, slot=1)
+
+
 def _rebuild_reference_list(refs: List, unique_map: Dict[str, DoiEntry],
                             citing_stem: Optional[str] = None,
                             is_existing: bool = True) -> Tuple[List[str], int]:
@@ -148,11 +159,7 @@ def _process_one_file(file: Path, unique_map: Dict[str, DoiEntry],
         doi_refs = [process_doi(doi) for doi in unique_dois.values()]
     with lock:
         for name, disp in cb_parsed:
-            dl = disp.lower()
-            cited_by_map.setdefault(dl, (disp, []))
-            if file.stem not in cited_by_map[dl][1]:
-                cited_by_map[dl][1].append(file.stem)
-            _update_doi_map(disp, name, unique_map, file.stem, slot=1)
+            _record_cited_by(name, disp, file.stem, unique_map, cited_by_map)
         if unhandled:
             print(f'处理未处理文件：{file.name}')
             removed = [k for k in ('author', 'published') if fm.pop(k, None) is not None]
@@ -189,12 +196,7 @@ def _build_maps_from_fms(md_files, fms, unique_map, cited_by_map):
                     _update_doi_map(display_doi, name_part, unique_map, f.stem, slot=0)
         for item in fm.get('cited_by', []):
             if p := _parse_cited_by_entry(item):
-                name, disp = p
-                dl = disp.lower()
-                cited_by_map.setdefault(dl, (disp, []))
-                if f.stem not in cited_by_map[dl][1]:
-                    cited_by_map[dl][1].append(f.stem)
-                _update_doi_map(disp, name, unique_map, f.stem, slot=1)
+                _record_cited_by(p[0], p[1], f.stem, unique_map, cited_by_map)
 
 
 def _collect_stats_maps(md_files: List[Path],
@@ -304,8 +306,9 @@ def run_markdown_graph(directory: str, depth: int = 0) -> None:
                 if not md_files:
                     continue
                 unique_map, cited_by_map = _collect_stats_maps(md_files, written_fms)
-                print(f'\n📁 {folder.name}')
+                print(f'📁 {folder.name}')
                 _print_top_orphans(unique_map, cited_by_map)
 
-    print('\n🎉 全部处理完成！')
-    _print_top_orphans(unique_map, cited_by_map, lead='\n')
+    print('----------------')
+    print('🎉 全部处理完成！')
+    _print_top_orphans(unique_map, cited_by_map)

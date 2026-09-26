@@ -37,6 +37,7 @@ URL_PATTERN = re.compile(
     r'https?://[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)',
     re.IGNORECASE
 )
+IMAGES_PATH_PATTERN = re.compile(r'\]\(images/')
 
 
 def extract_text(obj):
@@ -140,14 +141,16 @@ def _merge_new_dois(fm, all_dois, md_name):
 
 def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, doi_title_cache,
                         cite_by_cache, enable_cited_by=False, cited_by_max=10,
-                        images_dir=None, clippings_doi_set=None, ref_max_age=15):
-    if not md_dst.exists():
-        return False
-    try:
-        content = normalize_unicode_dashes(md_dst.read_text(encoding='utf-8'))
-    except Exception as e:
-        print(f'读取MD文件失败 {md_dst}: {e}')
-        return False
+                        images_dir=None, clippings_doi_set=None, ref_max_age=15,
+                        content=None):
+    if content is None:
+        if not md_dst.exists():
+            return False
+        try:
+            content = normalize_unicode_dashes(md_dst.read_text(encoding='utf-8'))
+        except Exception as e:
+            print(f'读取MD文件失败 {md_dst}: {e}')
+            return False
 
     dois_md = set(find_plausible_dois(repair_doi_text(content)))
     json_dois, urls = _extract_json_data(json_src)
@@ -204,7 +207,7 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, doi_title_c
 
     rest = clean_markdown_body(rest)
     if images_dir:
-        rest = re.sub(r'\]\(images/', f']({images_dir.resolve().as_posix()}/', rest)
+        rest = IMAGES_PATH_PATTERN.sub(f']({images_dir.resolve().as_posix()}/', rest)
     fm.pop('特殊引用数', None)
     try:
         md_dst.write_text(dump_frontmatter(fm, rest), encoding='utf-8')
@@ -222,7 +225,9 @@ def _download_zip(zip_url, zip_path, file_name, idx):
     try:
         r = _http.get(zip_url, stream=True, timeout=120)
         r.raise_for_status()
-        zip_path.write_bytes(r.content)
+        with open(zip_path, 'wb') as fh:  # 流式写盘，避免整包常驻内存
+            for chunk in r.iter_content(1 << 20):
+                fh.write(chunk)
         return idx, True
     except Exception as e:
         print(f'[{idx}] 下载失败: {e}')
@@ -311,15 +316,16 @@ def _run_local_batch(pdf_files, path_md0, enable_api_refs,
             return None
         md_dst = pm / f'{canonicalize_stem(pdf_path.stem)}.md'
         fm = {'pdf_path': str(pdf_path)}
+        content = dump_frontmatter(fm, md_content)
         try:
-            md_dst.write_text(dump_frontmatter(fm, md_content), encoding='utf-8')
+            md_dst.write_text(content, encoding='utf-8')
         except Exception as e:
             print(f'  写入失败: {e}')
             return None
         success = _process_md_content(
             md_dst, None, pdf_path, enable_api_refs,
             doi_title_cache, cite_by_cache, enable_cited_by, cited_by_max,
-            images_dir, clippings_doi_set, ref_max_age,
+            images_dir, clippings_doi_set, ref_max_age, content=content,
         )
         if success:
             _mark_pdf_done(pdf_path)

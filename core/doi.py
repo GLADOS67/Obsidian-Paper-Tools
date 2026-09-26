@@ -29,7 +29,8 @@ _RE_ID_TAIL = re.compile(r'\.?\(?(?:PMID|PMCID):?\s*\d+\)?\.?$', re.IGNORECASE)
 _RE_YEAR_OR_DOTS_TAIL = re.compile(r'\(\d{4}\)\.?$|\.+$')
 
 UNICODE_DASH_TABLE = str.maketrans('\u2010\u2011\u2012\u2013\u2014\u2015\u2212', '-------')
-PDF_ARTIFACTS = str.maketrans('', '', '\u200b\u200c\u200d\ufeff\u00ad\u200e\u200f\u2028\u2029')
+_PDF_ARTIFACT_CHARS = '​‌‍﻿­‎‏  '
+PDF_ARTIFACTS = str.maketrans('', '', _PDF_ARTIFACT_CHARS)
 CANONICAL_CHAR_TABLE = str.maketrans({
     '\u2018': '\u201c', '\u2019': '\u201d', '\u201a': '\u201c',
     '\u201b': '\u201c', '\u201c': '\u201c', '\u201d': '\u201d',
@@ -39,7 +40,6 @@ CANONICAL_CHAR_TABLE = str.maketrans({
     '\u2014': '-', '\u2015': '-', '\u2212': '-',
     '\u2026': '...',
 })
-_PDF_ARTIFACT_CHARS = '\u200b\u200c\u200d\ufeff\u00ad\u200e\u200f\u2028\u2029'
 # PDF伪影删除 + Unicode规范化 二合一单趟 translate（两表字符集不相交，结果与两次translate一致）
 TITLE_NORM_TABLE = str.maketrans({**{ord(c): None for c in _PDF_ARTIFACT_CHARS},
                                   **CANONICAL_CHAR_TABLE})
