@@ -499,7 +499,7 @@ def run_pmce(input_arg, path, no_graph=False, dry_run=False):
             continue
         seen_ids.add(meta.get('id'))
         put_doi_title(doi_title_cache, meta.get('doi') or '',
-                      html.unescape(meta.get('title') or ''))
+                      html.unescape(meta.get('title') or ''), force=True)
         if meta.get('pmcid') and meta.get('isOpenAccess') == 'Y':
             jobs.append(meta)
         else:

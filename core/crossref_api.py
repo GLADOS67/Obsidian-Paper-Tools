@@ -70,8 +70,10 @@ def _rebuild_title_reverse(cache: dict) -> None:
             _index_title(title.lower(), doi)
 
 
-def put_doi_title(cache: dict, doi: str, title: str, lock: threading.Lock = None) -> None:
-    """幂等写入 doi → [title, 规范化title]。已存在非空 title 不覆盖，空 title 占位可被填充。
+def put_doi_title(cache: dict, doi: str, title: str, lock: threading.Lock = None,
+                  force: bool = False) -> None:
+    """幂等写入 doi → [title, 规范化title]。已存在非空 title 默认不覆盖，空 title 占位可被填充；
+    force=True（PMCE 高可信源）允许覆盖已有非空标题。
 
     写入前统一审核：is_plausible_doi 不通过则拒绝（防截断/拼接错误DOI混入缓存）。
     """
@@ -90,7 +92,7 @@ def put_doi_title(cache: dict, doi: str, title: str, lock: threading.Lock = None
         val = cache.get(doi)
         if isinstance(val, list) and val:
             old = val[0] if isinstance(val[0], str) else ''
-            if not old and title:
+            if (force and title) or (not old and title):
                 val[0] = title
                 if len(val) >= 2:
                     val[1] = _norm_title(title)
@@ -119,7 +121,13 @@ def lookup_doi_by_title(title: str, cache: dict = None,
         return None
     with lock or _LOCK:
         if hit := _TITLE_REVERSE.get(norm):
-            return hit[0]
+            hit_doi = hit[0]
+            val = cache.get(hit_doi) if cache is not None else None
+            cached_title = (val[0] if isinstance(val, list) and val and isinstance(val[0], str) else
+                            val if isinstance(val, str) else '')
+            if cached_title and SequenceMatcher(None, norm, _norm_title(cached_title)).ratio() >= _EXACT_SIM:
+                return hit_doi
+            # title/norm 不一致（畸形条目）→ 视为可疑，落入模糊匹配
         if len(norm) >= 20:
             # ratio ≤ quick_ratio ≤ 2·min(a,b)/(a+b)，长度越界候选必低于阈值，直接跳过
             best, best_score = None, 0.0
@@ -148,7 +156,11 @@ def _api_get(url: str, params: dict = None, timeout: int = 10) -> Optional[dict]
 
 def get_doi_from_citation(citation_text: str, cache: dict = None,
                           lock: threading.Lock = None) -> Optional[Tuple[str, str]]:
-    """标题/引用文本 → DOI。先查 Doi_Title_cache（精确→模糊0.95），miss 才请求 Crossref。"""
+    """标题/引用文本 → DOI。先查 Doi_Title_cache（精确→模糊0.95），miss 才请求 Crossref。
+
+    Crossref 返回结果经相似度门控（≥_CROSSREF_SIM 或子串命中）才接受，
+    防止 query.title 误匹配把类似标题挂到错误 DOI 上（污染源头）。
+    """
     cache = cache or {}
     cached_doi = lookup_doi_by_title(citation_text, cache, lock)
     if cached_doi:
@@ -157,19 +169,33 @@ def get_doi_from_citation(citation_text: str, cache: dict = None,
         title = val[0] if isinstance(val, list) and val and isinstance(val[0], str) else ''
         print(f'缓存命中标题→DOI: {cached_doi}')
         return cached_doi, title
+    norm_cit = _norm_title(citation_text)
+    if len(norm_cit) < 4:
+        return None
     data = _api_get(CROSSREF_API_BASE, params={
-        'rows': 1, 'mailto': CROSSREF_MAILTO, 'query': citation_text,
+        'rows': 3, 'mailto': CROSSREF_MAILTO, 'query.title': citation_text,
     })
     polite_sleep()
     if data is None:
         print(f'Crossref API请求失败: {citation_text[:80]}')
         return None
-    items = data.get('message', {}).get('items', [])
-    if not items:
-        print(f'Crossref无匹配结果: {citation_text[:80]}')
+    best = None
+    for item in data.get('message', {}).get('items', []):
+        ct = (item.get('title') or [''])[0]
+        if not ct:
+            continue
+        norm_ct = _norm_title(ct)
+        if not ratio_gate_passes(len(norm_cit), len(norm_ct), _CROSSREF_SIM):
+            continue
+        if SequenceMatcher(None, norm_cit, norm_ct).ratio() >= _CROSSREF_SIM \
+                or norm_ct in norm_cit or norm_cit in norm_ct:
+            best = item
+            break
+    if best is None:
+        print(f'Crossref 无高置信匹配（门控拒绝，防误配）: {citation_text[:80]}')
         return None
-    doi = items[0].get('DOI')
-    title = (items[0].get('title') or [''])[0]
+    doi = best.get('DOI')
+    title = (best.get('title') or [''])[0]
     if not doi:
         print(f'Crossref结果无DOI: {title[:80]}')
         return None
