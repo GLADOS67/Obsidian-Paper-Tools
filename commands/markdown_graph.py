@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from core.cache import read_text_auto
-from core.crossref_api import (load_cite_by_cache, load_doi_title_cache,
-                               lookup_doi_by_title, put_doi_title,
-                               save_cite_by_cache, save_doi_title_cache)
+from core.title_cache import (load_doi_title_cache, lookup_doi_by_title,
+                              put_doi_title, save_doi_title_cache)
+from core.web_services import load_cite_by_cache, save_cite_by_cache
 from core.doi import (PATTERN_DOI, PATTERN_SAFE_DOI, find_plausible_dois,
                       is_plausible_doi, normalize_unicode_dashes, process_doi,
                       repair_doi_text)
@@ -296,15 +296,17 @@ def run_markdown_graph(directory: str, depth: int = 0) -> None:
     save_cite_by_cache(cite_by_cache)
 
     if depth > 0:
-        tiers: Dict[int, List[Path]] = {}
-        for p in target.rglob('*'):
-            if p.is_dir() and (d := len(p.relative_to(target).parts)) <= depth:
-                tiers.setdefault(d, []).append(p)
+        # 单次目录树遍历构建 文件夹→md文件 映射（原实现每文件夹一次 rglob，重复磁盘遍历）
+        folder_files: Dict[Path, List[Path]] = {}
+        for md_file in target.rglob('*.md'):
+            folder = md_file.parent
+            if len(folder.relative_to(target).parts) > depth:
+                continue
+            folder_files.setdefault(folder, []).append(md_file)
         for d in range(1, depth + 1):
-            for folder in sorted(tiers.get(d, [])):
-                md_files = sorted(folder.rglob('*.md'))
-                if not md_files:
-                    continue
+            for folder in sorted(f for f in folder_files
+                                 if len(f.relative_to(target).parts) == d):
+                md_files = sorted(folder_files[folder])
                 unique_map, cited_by_map = _collect_stats_maps(md_files, written_fms)
                 print(f'📁 {folder.name}')
                 _print_top_orphans(unique_map, cited_by_map)

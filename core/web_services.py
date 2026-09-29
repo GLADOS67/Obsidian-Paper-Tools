@@ -1,3 +1,13 @@
+"""远程网络服务：Crossref works API + PubMed E-utilities（施引查询）。
+
+线上服务层：
+  - Crossref：标题→DOI（get_doi_from_citation）、DOI→参考文献（fetch_references）
+  - PubMed：DOI→近5年施引（get_cited_by_pubmed）、frontmatter 新鲜度+写回（refresh_cited_by）
+  - Cite_By_cache 读写（施引缓存，独立于 title_cache）
+标题缓存（Doi_Title_cache）在 core.title_cache，此处写标题缓存统一传 TITLE_LOCK；
+施引缓存由本模块 _CITE_LOCK 保护；两锁无嵌套获取，并发语义与原单一锁等价。
+"""
+
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -6,33 +16,21 @@ from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Tuple
 
 from core.cache import load_cache, save_cache
-from core.doi import TITLE_NORM_TABLE, is_plausible_doi, process_doi
+from core.doi import TITLE_NORM_TABLE, process_doi
 from core.frontmatter import apply_cited_by, cited_by_fresh
 from core.http import get_session, polite_sleep
 from core.similarity import ratio_gate_passes
+from core.title_cache import TITLE_LOCK, lookup_doi_by_title, put_doi_title
 
-from config import CPU_CORES, CITE_BY_CACHE, CROSSREF_MAILTO, DOI_TITLE_CACHE
+from config import CPU_CORES, CITE_BY_CACHE, CROSSREF_MAILTO
 CROSSREF_API_BASE = 'https://api.crossref.org/works'
 
-_LOCK = threading.Lock()
-_TITLE_REVERSE: Dict[str, Tuple[str, int]] = {}  # 规范化标题 → (doi, 标题长度)，长度用于模糊匹配上界预剪枝
-_FUZZY_THRESHOLD = 0.95
+_CITE_LOCK = threading.Lock()
 _CROSSREF_SIM = 0.5   # Crossref 返回标题 vs 引用文本的最低相似度（与 pmce _TITLE_SIM 一致）
-_EXACT_SIM = 0.9      # lookup 精确命中后 title/norm 一致性下限（防畸形条目）
 
 _http = get_session()
 
 _PUBDATE_RE = re.compile(r'(\d{4})/(\d{2})/(\d{2})')
-
-
-def load_doi_title_cache() -> Dict:
-    cache = load_cache(DOI_TITLE_CACHE)
-    _rebuild_title_reverse(cache)
-    return cache
-
-
-def save_doi_title_cache(cache: dict) -> None:
-    save_cache(DOI_TITLE_CACHE, cache)
 
 
 def load_cite_by_cache() -> Dict:
@@ -47,102 +45,6 @@ def _norm_title(text: str) -> str:
     """标题规范化：PDF伪影清理 + Unicode引号/破折号统一 + 小写 + 空格/下划线折叠 + 去尾标点。"""
     return re.sub(r'\s+', ' ', text.translate(TITLE_NORM_TABLE)
                   .lower().replace('_', ' ')).strip().rstrip(' .;:')
-
-
-def _index_title(key: str, doi: str) -> None:
-    """setdefault 语义写入标题→(DOI,长度) 索引（不覆盖已有项）。"""
-    if key not in _TITLE_REVERSE:
-        _TITLE_REVERSE[key] = (doi, len(key))
-
-
-def _rebuild_title_reverse(cache: dict) -> None:
-    _TITLE_REVERSE.clear()
-    for doi, val in cache.items():
-        if isinstance(val, list) and val:
-            title = val[0] if isinstance(val[0], str) else ''
-            norm = val[1] if len(val) >= 2 and isinstance(val[1], str) else ''
-        elif isinstance(val, str):
-            title, norm = val, ''
-        else:
-            continue
-        if title:
-            _index_title(norm or _norm_title(title), doi)
-            _index_title(title.lower(), doi)
-
-
-def put_doi_title(cache: dict, doi: str, title: str, lock: threading.Lock = None,
-                  force: bool = False) -> None:
-    """幂等写入 doi → [title, 规范化title]。已存在非空 title 默认不覆盖，空 title 占位可被填充；
-    force=True（PMCE 高可信源）允许覆盖已有非空标题。
-
-    写入前统一审核：is_plausible_doi 不通过则拒绝（防截断/拼接错误DOI混入缓存）。
-    """
-    if not doi:
-        return
-    doi = process_doi(doi)[0]
-    if not is_plausible_doi(doi):
-        print(f'⚠️ 拒绝写入可疑DOI: {doi} {title[:40]}')
-        return
-    title = (title or '').strip()
-    # 标题含 wikilink 包裹（[[...]]）是历史遗留格式，非真实标题，拒绝写入缓存
-    if '[' in title or ']' in title:
-        print(f'⚠️ 拒绝写入wikilink格式标题: {doi} {title[:40]}')
-        return
-    with lock or _LOCK:
-        val = cache.get(doi)
-        if isinstance(val, list) and val:
-            old = val[0] if isinstance(val[0], str) else ''
-            if (force and title) or (not old and title):
-                val[0] = title
-                if len(val) >= 2:
-                    val[1] = _norm_title(title)
-                else:
-                    val.append(_norm_title(title))
-        elif isinstance(val, str):
-            old = val.strip()
-            cache[doi] = [old or title, _norm_title(old or title)]
-        else:
-            cache[doi] = [title, _norm_title(title)] if title else ['', '']
-        cur = cache[doi]
-        t = cur[0] if isinstance(cur, list) and cur else ''
-        if t:
-            n = cur[1] if isinstance(cur, list) and len(cur) >= 2 and isinstance(cur[1], str) else ''
-            _index_title(n or _norm_title(t), doi)
-            _index_title(t.lower(), doi)
-
-
-def lookup_doi_by_title(title: str, cache: dict = None,
-                        lock: threading.Lock = None) -> Optional[str]:
-    """仅查 Doi_Title_cache：规范化精确命中 → 长标题模糊(≥0.95)，不发 API。"""
-    if not title:
-        return None
-    norm = _norm_title(title)
-    if len(norm) < 4:
-        return None
-    with lock or _LOCK:
-        if hit := _TITLE_REVERSE.get(norm):
-            hit_doi = hit[0]
-            val = cache.get(hit_doi) if cache is not None else None
-            cached_title = (val[0] if isinstance(val, list) and val and isinstance(val[0], str) else
-                            val if isinstance(val, str) else '')
-            if cached_title and SequenceMatcher(None, norm, _norm_title(cached_title)).ratio() >= _EXACT_SIM:
-                return hit_doi
-            # title/norm 不一致（畸形条目）→ 视为可疑，落入模糊匹配
-        if len(norm) >= 20:
-            # ratio ≤ quick_ratio ≤ 2·min(a,b)/(a+b)，长度越界候选必低于阈值，直接跳过
-            best, best_score = None, 0.0
-            for cand, (doi, clen) in _TITLE_REVERSE.items():
-                if clen < 10 or not ratio_gate_passes(len(norm), clen, _FUZZY_THRESHOLD):
-                    continue
-                sm = SequenceMatcher(None, norm, cand)
-                if sm.quick_ratio() < _FUZZY_THRESHOLD:
-                    continue
-                score = sm.ratio()
-                if score > best_score:
-                    best, best_score = doi, score
-            if best and best_score >= _FUZZY_THRESHOLD:
-                return best
-    return None
 
 
 def _api_get(url: str, params: dict = None, timeout: int = 10) -> Optional[dict]:
@@ -164,7 +66,7 @@ def get_doi_from_citation(citation_text: str, cache: dict = None,
     cache = cache or {}
     cached_doi = lookup_doi_by_title(citation_text, cache, lock)
     if cached_doi:
-        with lock or _LOCK:
+        with lock or TITLE_LOCK:
             val = cache.get(cached_doi)
         title = val[0] if isinstance(val, list) and val and isinstance(val[0], str) else ''
         print(f'缓存命中标题→DOI: {cached_doi}')
@@ -234,12 +136,12 @@ def fetch_references(doi: str, cache: dict = None) -> Tuple[List[Dict], Optional
             refs_missing.append(ref)
 
     for r in refs_with_doi:
-        put_doi_title(cache, r['doi'], r['title'], _LOCK)
+        put_doi_title(cache, r['doi'], r['title'], TITLE_LOCK)
 
     if refs_missing:
         print(f'并行补全 {len(refs_missing)} 个缺失DOI...')
         with ThreadPoolExecutor(max_workers=min(CPU_CORES * 2, 4)) as ex:
-            futures = {ex.submit(get_doi_from_citation, r['unstructured'], cache, _LOCK): r
+            futures = {ex.submit(get_doi_from_citation, r['unstructured'], cache, TITLE_LOCK): r
                        for r in refs_missing}
             for fut in as_completed(futures):
                 ref = futures[fut]
@@ -260,13 +162,13 @@ def get_cited_by_pubmed(doi: str, cite_by_cache: dict = None,
     doi_title_cache = doi_title_cache or {}
     existing_dois = existing_dois or set()
 
-    with _LOCK:
+    with _CITE_LOCK:
         cached = cite_by_cache.get(doi)
     if cached is not None:
         return len(cached), [d for d in cached if d.lower() not in existing_dois][:max_rows]
 
     def _finalize(all_dois: List[str]) -> Tuple[int, List[str]]:
-        with _LOCK:
+        with _CITE_LOCK:
             cite_by_cache[doi] = all_dois
         return len(all_dois), [d for d in all_dois if d.lower() not in existing_dois][:max_rows]
 
@@ -316,7 +218,7 @@ def get_cited_by_pubmed(doi: str, cite_by_cache: dict = None,
             doi_val = next((aid.get('value') for aid in item.get('articleids', [])
                             if aid.get('idtype') == 'doi'), None)
             if doi_val:
-                put_doi_title(doi_title_cache, doi_val, item.get('title') or '', _LOCK)
+                put_doi_title(doi_title_cache, doi_val, item.get('title') or '', TITLE_LOCK)
                 citing.append((pubdate, process_doi(doi_val)[0]))
     citing.sort(key=lambda x: x[0], reverse=True)
     return _finalize([d for _, d in citing])

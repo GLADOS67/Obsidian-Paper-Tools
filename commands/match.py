@@ -15,7 +15,7 @@ from core.refs import (
     parse_h1_wikilink, extract_wikilink_name, first_ref_target,
     extract_doi_set,
 )
-from core.similarity import ratio_gate_passes
+from core.similarity import bucket_candidates, bucket_index, ratio_gate_passes
 from config import OBSIDIAN_ROOT
 
 JACCARD_THRESHOLD = 0.85
@@ -44,14 +44,16 @@ def _jaccard(a: set, b: set) -> float:
 
 
 def _fuzzy_best(stem_lower: str, candidates: List[Tuple[str, Path]],
-                threshold: float = SM_QUICK) -> Optional[Tuple[Path, float]]:
+                threshold: float = SM_QUICK, buckets=None) -> Optional[Tuple[Path, float]]:
     """candidates 为预小写的 (stem_lower, path) 列表（全循环构建一次，避免逐候选重复 lower）。
 
     ratio ≤ quick_ratio ≤ 2·min(a,b)/(a+b)，长度越界候选必被 quick_ratio 门槛筛掉，直接跳过。
+    buckets 为长度分桶索引时只遍历可能达标的桶（候选集大时降为 ~1/10，结果不变）。
     """
     la, gate = len(stem_lower), threshold * 0.9
+    iterable = bucket_candidates(buckets, la, gate) if buckets is not None else candidates
     best, best_score = None, 0.0
-    for cand_lower, cand_path in candidates:
+    for cand_lower, cand_path in iterable:
         if not ratio_gate_passes(la, len(cand_lower), gate):
             continue
         sm = SequenceMatcher(None, stem_lower, cand_lower)
@@ -84,7 +86,7 @@ def _find_pa(clip_stem: str, pa_index: Dict[str, Path],
               pa_reverse: Dict[str, Tuple[Path, str]], pa_text: Dict[str, str],
               pa_alias: Dict[str, str], doi: Optional[str],
               doi_memo: Dict[str, Optional[Tuple[Path, Optional[str], str]]],
-              pa_keys: List[Tuple[str, Path]]
+              pa_keys: List[Tuple[str, Path]], pa_buckets=None
               ) -> Tuple[Optional[Path], Optional[str], str]:
     """按 reverse → filename → doi → fuzzy 顺序定位 PA 笔记。
 
@@ -105,21 +107,21 @@ def _find_pa(clip_stem: str, pa_index: Dict[str, Path],
         found = doi_memo[doi] or (None, None, '')
         if found[0]:
             return found
-    if result := _fuzzy_best(underscore_stem.lower(), pa_keys):
+    if result := _fuzzy_best(underscore_stem.lower(), pa_keys, buckets=pa_buckets):
         return result[0], pa_alias.get(result[0].stem), 'fuzzy'
     return None, None, ''
 
 
 def _find_fe(underscore_stem: str, fe_index: Dict[str, Path],
              fe_reverse: Dict[str, Tuple[Path, str]],
-             fe_keys: List[Tuple[str, Path]]
+             fe_keys: List[Tuple[str, Path]], fe_buckets=None
              ) -> Tuple[Optional[Path], Optional[str], str]:
     """按 reverse → filename → fuzzy 顺序定位 FE 笔记。"""
     if rev := fe_reverse.get(underscore_stem):
         return rev[0], rev[1], 'reverse'
     if fe_path := fe_index.get(underscore_stem):
         return fe_path, None, 'filename'
-    if result := _fuzzy_best(underscore_stem.lower() + '_figures', fe_keys):
+    if result := _fuzzy_best(underscore_stem.lower() + '_figures', fe_keys, buckets=fe_buckets):
         return result[0], None, 'fuzzy'
     return None, None, ''
 
@@ -141,23 +143,24 @@ def _match_pa(clip_md: Path, fm: dict, pa_index: Dict[str, Path],
               pa_alias: Dict[str, str], force: bool,
               clippings_doi_cache: Optional[str] = None,
               doi_memo: Optional[dict] = None,
-              pa_keys: List[Tuple[str, Path]] = ()):
+              pa_keys: List[Tuple[str, Path]] = (),
+              pa_buckets=None):
     existing = fm.get('paper-analyze')
     if existing and not force:
         return 'skipped', None
     doi = _extract_clippings_doi(fm) if clippings_doi_cache is None else clippings_doi_cache
     found = _find_pa(clip_md.stem, pa_index, pa_reverse, pa_text, pa_alias,
-                     doi, doi_memo if doi_memo is not None else {}, pa_keys)
+                     doi, doi_memo if doi_memo is not None else {}, pa_keys, pa_buckets)
     return _apply_found(clip_md, fm, 'paper-analyze', existing, found, 'PA')
 
 
 def _match_fe(clip_md: Path, fm: dict, fe_index: Dict[str, Path],
               fe_reverse: Dict[str, Tuple[Path, str]], force: bool,
-              fe_keys: List[Tuple[str, Path]] = ()):
+              fe_keys: List[Tuple[str, Path]] = (), fe_buckets=None):
     existing = fm.get('figure-extractor')
     if existing and not force:
         return 'skipped', None
-    found = _find_fe(clip_md.stem.replace(' ', '_'), fe_index, fe_reverse, fe_keys)
+    found = _find_fe(clip_md.stem.replace(' ', '_'), fe_index, fe_reverse, fe_keys, fe_buckets)
     return _apply_found(clip_md, fm, 'figure-extractor', existing, found, 'FE')
 
 
@@ -351,9 +354,11 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     doi_memo: Dict[str, Optional[Tuple[Path, Optional[str], str]]] = {}
     matched_stems: set = set()
     trash_reclaims: Dict[str, str] = {}
-    # 索引已定型，预小写键列表全循环仅构建一次（fuzzy 匹配免重复 lower）
+    # 索引已定型，预小写键列表 + 长度分桶全循环仅构建一次（fuzzy 匹配免重复 lower 与逐条长度过滤）
     pa_keys = [(s.lower(), p) for s, p in pa_index.items()]
     fe_keys = [(s.lower(), p) for s, p in fe_index.items()]
+    pa_buckets = bucket_index(pa_keys, lambda kv: len(kv[0]))
+    fe_buckets = bucket_index(fe_keys, lambda kv: len(kv[0]))
 
     clip_mds = sorted(clip_dir.rglob('*.md'))
     for clip_md, (fm, body) in zip(clip_mds, parse_frontmatter_batch(clip_mds)):
@@ -373,7 +378,8 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
 
         clip_doi_value = _extract_clippings_doi(fm)
         pa_result, pa_path = _match_pa(clip_md, fm, pa_index, pa_reverse, pa_text,
-                                       pa_alias, force, clip_doi_value, doi_memo, pa_keys)
+                                       pa_alias, force, clip_doi_value, doi_memo,
+                                       pa_keys, pa_buckets)
         stats['pa'][pa_result] += 1
         any_changed |= pa_result == 'matched'
         pa_stem = pa_path.stem if pa_path else extract_wikilink_name(fm.get('paper-analyze'))
@@ -382,7 +388,8 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
             if pa_stem in trash_pa_source:
                 trash_reclaims[pa_stem] = base.name
 
-        fe_result, fe_path = _match_fe(clip_md, fm, fe_index, fe_reverse, force, fe_keys)
+        fe_result, fe_path = _match_fe(clip_md, fm, fe_index, fe_reverse, force,
+                                       fe_keys, fe_buckets)
         stats['fe'][fe_result] += 1
         any_changed |= fe_result == 'matched'
         fe_stem = fe_path.stem if fe_path else extract_wikilink_name(fm.get('figure-extractor'))

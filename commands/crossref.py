@@ -3,9 +3,9 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from core.crossref_api import (fetch_references, get_doi_from_citation,
-                                load_doi_title_cache, put_doi_title,
-                                save_doi_title_cache)
+from core.title_cache import (load_doi_title_cache, put_doi_title,
+                              save_doi_title_cache)
+from core.web_services import fetch_references, get_doi_from_citation
 from core.doi import (PATTERN_DOI, extract_doi_from_frontmatter,
                        get_main_doi, process_doi, repair_doi_text)
 from core.frontmatter import dump_frontmatter, fm_title, parse_frontmatter_str

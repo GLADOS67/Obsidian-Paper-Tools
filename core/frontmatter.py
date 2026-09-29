@@ -87,21 +87,18 @@ def build_doi_set(md_dir: Path, include_refs: bool = False) -> set:
     """并行收集目录树下所有 MD 的 frontmatter DOI（去重、小写）。
 
     include_refs 为 True 时同时收集 reference / cited_by wikilink 中的 DOI。
+    复用 parse_frontmatter_batch（C 加载器 + 单线程池），避免自建池重复读盘解析。
     """
-    def _collect(md_file: Path) -> set:
-        try:
-            fm = parse_frontmatter_file(md_file)[0] or {}
-        except Exception:
-            return set()
-        dois = set()
+    mds = list(md_dir.rglob('*.md'))
+    dois = set()
+    for _, fm in zip(mds, parse_frontmatter_batch(mds, fm_only=True)):
+        if not fm:
+            continue
         if main := extract_doi_from_frontmatter(fm):
             dois.add(main.lower())
-        if include_refs and fm:
+        if include_refs:
             for key in ('reference', 'cited_by'):
                 for ref in fm.get(key, []):
                     if isinstance(ref, str) and (m := PATTERN_DOI.search(ref)):
                         dois.add(m.group(0).lower())
-        return dois
-
-    with ThreadPoolExecutor() as ex:
-        return set().union(*ex.map(_collect, md_dir.rglob('*.md')))
+    return dois

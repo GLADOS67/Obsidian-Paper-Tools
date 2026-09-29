@@ -3,9 +3,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
-from core.crossref_api import (load_cite_by_cache, load_doi_title_cache,
-                               refresh_cited_by, save_cite_by_cache,
-                               save_doi_title_cache)
+from core.title_cache import load_doi_title_cache, save_doi_title_cache
+from core.web_services import (load_cite_by_cache, refresh_cited_by,
+                               save_cite_by_cache)
 from core.doi import PATTERN_DOI, get_main_doi, process_doi
 from core.frontmatter import (
     build_doi_set, cited_by_fresh, dump_frontmatter,

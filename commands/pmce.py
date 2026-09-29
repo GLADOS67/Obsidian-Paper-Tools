@@ -19,8 +19,7 @@ from pathlib import Path
 from curl_cffi import requests as curl_requests
 
 from core.cache import read_text_auto
-from core.crossref_api import (load_doi_title_cache, put_doi_title,
-                               save_doi_title_cache)
+from core.title_cache import load_doi_title_cache, put_doi_title, save_doi_title_cache
 from core.doi import (PATTERN_DOI, PATTERN_FS_INVALID, PATTERN_SAFE_DOI,
                       find_plausible_dois, normalize_unicode_dashes, process_doi)
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str

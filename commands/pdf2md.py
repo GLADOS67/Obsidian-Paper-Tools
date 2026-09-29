@@ -12,11 +12,11 @@ from pathlib import Path
 
 from requests.exceptions import JSONDecodeError
 
-from core.crossref_api import (fetch_references, get_doi_from_citation,
-                               load_cite_by_cache, load_doi_title_cache,
-                               lookup_doi_by_title, put_doi_title,
-                               refresh_cited_by, save_cite_by_cache,
-                               save_doi_title_cache)
+from core.title_cache import (load_doi_title_cache, lookup_doi_by_title,
+                              put_doi_title, save_doi_title_cache)
+from core.web_services import (fetch_references, get_doi_from_citation,
+                               load_cite_by_cache, refresh_cited_by,
+                               save_cite_by_cache)
 from core.doi import (find_plausible_dois, get_main_doi,
                        normalize_unicode_dashes, process_doi, repair_doi_text)
 from core.frontmatter import (build_doi_set, dump_frontmatter,
@@ -381,7 +381,8 @@ def _process_downloaded_one(idx, f_info, path_zip, path_md0, name_to_path, path_
 def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
                                enable_api_refs, doi_title_cache, cite_by_cache,
                                enable_cited_by=False, cited_by_max=10, batch_files=None,
-                               images_output=None, ref_max_age=15):
+                               images_output=None, ref_max_age=15,
+                               clippings_doi_set=None):
     name_to_path = {Path(f).name: Path(f) for f in (batch_files or [])}
     images_output = images_output or DEFAULT_IMAGE_PATH
     images_output.mkdir(exist_ok=True)
@@ -399,7 +400,6 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
         for future in as_completed(futures):
             future.result()
 
-    clippings_doi_set = build_doi_set(path_md0) if enable_cited_by else None
     with ThreadPoolExecutor(max_workers=min(CPU_CORES * 2, 4)) as ex:
         futures = [
             ex.submit(_process_downloaded_one, idx, f_info, path_zip, path_md0,
@@ -483,8 +483,10 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
 
     print(f'共发现 {len(pdf_files)} 个PDF待处理')
 
+    # 全库 DOI 集合一次构建，local/各批次共享（原实现每个批次重复扫描，重复磁盘 I/O）
+    clippings_doi_set = build_doi_set(pm) if enable_cited_by else None
+
     if local:
-        clippings_doi_set = build_doi_set(pm) if enable_cited_by else None
         _run_local_batch(pdf_files, path_md0, enable_api_refs,
                         doi_title_cache, cite_by_cache, enable_cited_by, cited_by_max,
                         images_dir, clippings_doi_set, ref_max_age)
@@ -537,6 +539,7 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
         download_and_process_batch(bid, pz, pm, token, pp, enable_api_refs,
                                    doi_title_cache, cite_by_cache, enable_cited_by,
                                    cited_by_max, batch_file_map.get(bid, []),
-                                   images_output=images_dir, ref_max_age=ref_max_age)
+                                   images_output=images_dir, ref_max_age=ref_max_age,
+                                   clippings_doi_set=clippings_doi_set)
     save_doi_title_cache(doi_title_cache)
     save_cite_by_cache(cite_by_cache)
