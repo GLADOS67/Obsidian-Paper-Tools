@@ -328,13 +328,6 @@ def _table_md(tw):
     return lines
 
 
-def _figure_fallback_link(pmcid, alt):
-    """图片 URL 获取失败时的保底查看链接：label 数字 → PMC figure 页；无数字 → 文章页。"""
-    m = re.search(r'(\d+)', alt)
-    fig_path = f'/figure/F{m.group(1)}/' if m else '/'
-    return f'https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}{fig_path}'
-
-
 def _fig_md(fig, pmcid):
     graphic = next((g for g in fig.iter() if _local(g.tag) == 'graphic'), None)
     href = graphic.get(XLINK) if graphic is not None else None
@@ -345,9 +338,11 @@ def _fig_md(fig, pmcid):
     if href and (img_url := _get_figure_urls(pmcid).get(href)):
         lines.append(f'![{alt}]({img_url})')
     else:
+        # 保底查看链接：label 数字 → PMC figure 页，无数字 → 文章页（fig_num 复用于两处拼接）
         fig_num = re.search(r'(\d+)', alt)
         anchor = f'#F{fig_num.group(1)}' if fig_num else ''
-        lines.append(f'**[{alt}]({_figure_fallback_link(pmcid, alt)})** '
+        fig_path = f'/figure/F{fig_num.group(1)}/' if fig_num else '/'
+        lines.append(f'**[{alt}](https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}{fig_path})** '
                      f'{_para(caption) if caption is not None else ""} '
                      f'[EuropePMC 全文](https://europepmc.org/article/PMC/{pmcid.replace("PMC", "", 1)}{anchor})'.rstrip())
         if href:

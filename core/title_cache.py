@@ -4,13 +4,12 @@
 （put_doi_title / lookup_doi_by_title 的 lock 参数为 None 时用内部锁）。
 """
 
-import re
 import threading
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Tuple
 
 from core.cache import load_cache, save_cache
-from core.doi import TITLE_NORM_TABLE, is_plausible_doi, process_doi
+from core.doi import is_plausible_doi, norm_title, process_doi
 from core.similarity import BUCKET_WIDTH, bucket_candidates, ratio_gate_passes
 
 from config import DOI_TITLE_CACHE
@@ -32,12 +31,6 @@ def save_doi_title_cache(cache: dict) -> None:
     save_cache(DOI_TITLE_CACHE, cache)
 
 
-def _norm_title(text: str) -> str:
-    """标题规范化：PDF伪影清理 + Unicode引号/破折号统一 + 小写 + 空格/下划线折叠 + 去尾标点。"""
-    return re.sub(r'\s+', ' ', text.translate(TITLE_NORM_TABLE)
-                  .lower().replace('_', ' ')).strip().rstrip(' .;:')
-
-
 def _index_title(key: str, doi: str) -> None:
     """setdefault 语义写入标题→(DOI,长度) 索引（不覆盖已有项），同步维护长度分桶。"""
     if key not in _TITLE_REVERSE:
@@ -57,7 +50,7 @@ def _rebuild_title_reverse(cache: dict) -> None:
         else:
             continue
         if title:
-            _index_title(norm or _norm_title(title), doi)
+            _index_title(norm or norm_title(title), doi)
             _index_title(title.lower(), doi)
 
 
@@ -86,19 +79,19 @@ def put_doi_title(cache: dict, doi: str, title: str, lock: threading.Lock = None
             if (force and title) or (not old and title):
                 val[0] = title
                 if len(val) >= 2:
-                    val[1] = _norm_title(title)
+                    val[1] = norm_title(title)
                 else:
-                    val.append(_norm_title(title))
+                    val.append(norm_title(title))
         elif isinstance(val, str):
             old = val.strip()
-            cache[doi] = [old or title, _norm_title(old or title)]
+            cache[doi] = [old or title, norm_title(old or title)]
         else:
-            cache[doi] = [title, _norm_title(title)] if title else ['', '']
+            cache[doi] = [title, norm_title(title)] if title else ['', '']
         cur = cache[doi]
         t = cur[0] if isinstance(cur, list) and cur else ''
         if t:
             n = cur[1] if isinstance(cur, list) and len(cur) >= 2 and isinstance(cur[1], str) else ''
-            _index_title(n or _norm_title(t), doi)
+            _index_title(n or norm_title(t), doi)
             _index_title(t.lower(), doi)
 
 
@@ -107,7 +100,7 @@ def lookup_doi_by_title(title: str, cache: dict = None,
     """仅查 Doi_Title_cache：规范化精确命中 → 长标题模糊(≥0.95)，不发 API。"""
     if not title:
         return None
-    norm = _norm_title(title)
+    norm = norm_title(title)
     if len(norm) < 4:
         return None
     with lock or TITLE_LOCK:
@@ -116,7 +109,7 @@ def lookup_doi_by_title(title: str, cache: dict = None,
             val = cache.get(hit_doi) if cache is not None else None
             cached_title = (val[0] if isinstance(val, list) and val and isinstance(val[0], str) else
                             val if isinstance(val, str) else '')
-            if cached_title and SequenceMatcher(None, norm, _norm_title(cached_title)).ratio() >= _EXACT_SIM:
+            if cached_title and SequenceMatcher(None, norm, norm_title(cached_title)).ratio() >= _EXACT_SIM:
                 return hit_doi
             # title/norm 不一致（畸形条目）→ 视为可疑，落入模糊匹配
         if len(norm) >= 20:

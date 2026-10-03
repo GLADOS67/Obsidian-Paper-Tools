@@ -180,8 +180,7 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, doi_title_c
         refresh_cited_by(fm, main_doi, cite_by_cache, doi_title_cache,
                          clippings_doi_set, cited_by_max)
 
-    existing_refs = fm.get('reference', [])
-    if existing_refs:
+    if existing_refs := fm.get('reference', []):
         fm['reference'] = process_existing_references(existing_refs)
 
     year = fm.get('published')

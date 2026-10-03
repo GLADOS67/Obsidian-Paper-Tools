@@ -16,7 +16,7 @@ from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Tuple
 
 from core.cache import load_cache, save_cache
-from core.doi import TITLE_NORM_TABLE, process_doi
+from core.doi import norm_title, process_doi
 from core.frontmatter import apply_cited_by, cited_by_fresh
 from core.http import get_session, polite_sleep
 from core.similarity import ratio_gate_passes
@@ -39,12 +39,6 @@ def load_cite_by_cache() -> Dict:
 
 def save_cite_by_cache(cache: dict) -> None:
     save_cache(CITE_BY_CACHE, cache)
-
-
-def _norm_title(text: str) -> str:
-    """标题规范化：PDF伪影清理 + Unicode引号/破折号统一 + 小写 + 空格/下划线折叠 + 去尾标点。"""
-    return re.sub(r'\s+', ' ', text.translate(TITLE_NORM_TABLE)
-                  .lower().replace('_', ' ')).strip().rstrip(' .;:')
 
 
 def _api_get(url: str, params: dict = None, timeout: int = 10) -> Optional[dict]:
@@ -71,7 +65,7 @@ def get_doi_from_citation(citation_text: str, cache: dict = None,
         title = val[0] if isinstance(val, list) and val and isinstance(val[0], str) else ''
         print(f'缓存命中标题→DOI: {cached_doi}')
         return cached_doi, title
-    norm_cit = _norm_title(citation_text)
+    norm_cit = norm_title(citation_text)
     if len(norm_cit) < 4:
         return None
     data = _api_get(CROSSREF_API_BASE, params={
@@ -86,7 +80,7 @@ def get_doi_from_citation(citation_text: str, cache: dict = None,
         ct = (item.get('title') or [''])[0]
         if not ct:
             continue
-        norm_ct = _norm_title(ct)
+        norm_ct = norm_title(ct)
         if not ratio_gate_passes(len(norm_cit), len(norm_ct), _CROSSREF_SIM):
             continue
         if SequenceMatcher(None, norm_cit, norm_ct).ratio() >= _CROSSREF_SIM \

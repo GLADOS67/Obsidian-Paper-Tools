@@ -154,10 +154,7 @@ def run_reconcile(vault_root: str = r'C:\Vault',
             if pa_entry is not None:
                 break
 
-        if pa_entry:
-            fe_action[fe_key] = (fe_path, fvname, pa_entry[2])
-        else:
-            fe_action[fe_key] = (fe_path, fvname, 'trash')
+        fe_action[fe_key] = (fe_path, fvname, pa_entry[2] if pa_entry else 'trash')
 
     total = {'PA': {'keep': 0, 'move': 0, 'trash': 0},
              'FE': {'keep': 0, 'move': 0, 'trash': 0},

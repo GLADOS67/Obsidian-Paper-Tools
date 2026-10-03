@@ -296,18 +296,21 @@ def run_markdown_graph(directory: str, depth: int = 0) -> None:
     save_cite_by_cache(cite_by_cache)
 
     if depth > 0:
-        # 单次目录树遍历构建 文件夹→md文件 映射（原实现每文件夹一次 rglob，重复磁盘遍历）
+        # 单次目录树遍历构建 文件夹→md文件 映射，深度随遍历一次算好
+        # （原实现每文件夹一次 rglob + 每层级重复 relative_to，重复磁盘遍历与路径计算）
         folder_files: Dict[Path, List[Path]] = {}
+        folder_depth: Dict[Path, int] = {}
         for md_file in target.rglob('*.md'):
             folder = md_file.parent
-            if len(folder.relative_to(target).parts) > depth:
+            d = len(folder.relative_to(target).parts)
+            if d > depth:
                 continue
             folder_files.setdefault(folder, []).append(md_file)
+            folder_depth[folder] = d
         for d in range(1, depth + 1):
-            for folder in sorted(f for f in folder_files
-                                 if len(f.relative_to(target).parts) == d):
-                md_files = sorted(folder_files[folder])
-                unique_map, cited_by_map = _collect_stats_maps(md_files, written_fms)
+            for folder in sorted(f for f, fd in folder_depth.items() if fd == d):
+                folder_mds = sorted(folder_files[folder])
+                unique_map, cited_by_map = _collect_stats_maps(folder_mds, written_fms)
                 print(f'📁 {folder.name}')
                 _print_top_orphans(unique_map, cited_by_map)
 

@@ -44,13 +44,13 @@ def parse_frontmatter_batch(paths: List[Path], fm_only: bool = False):
 
 
 def dump_frontmatter(fm: Dict, body: str) -> str:
-    if fm:
-        yaml_str = yaml.dump(fm, sort_keys=False, allow_unicode=True,
-                             default_flow_style=False, Dumper=_YamlDumper).rstrip('\n')
-        # 换行归一：Windows write_text 会把 \n→\r\n，若 body 残留 \r\n 会变 \r\r\n 损坏
-        body = body.replace('\r\n', '\n').replace('\r', '\n')
-        return f'---\n{yaml_str}\n---\n{body}'
-    return body
+    if not fm:
+        return body
+    yaml_str = yaml.dump(fm, sort_keys=False, allow_unicode=True,
+                         default_flow_style=False, Dumper=_YamlDumper).rstrip('\n')
+    # 换行归一：Windows write_text 会把 \n→\r\n，若 body 残留 \r\n 会变 \r\r\n 损坏
+    body = body.replace('\r\n', '\n').replace('\r', '\n')
+    return f'---\n{yaml_str}\n---\n{body}'
 
 
 def fm_title(fm: Dict, fallback: str = '') -> str:

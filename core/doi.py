@@ -43,6 +43,16 @@ CANONICAL_CHAR_TABLE = str.maketrans({
 # PDF伪影删除 + Unicode规范化 二合一单趟 translate（两表字符集不相交，结果与两次translate一致）
 TITLE_NORM_TABLE = str.maketrans({**{ord(c): None for c in _PDF_ARTIFACT_CHARS},
                                   **CANONICAL_CHAR_TABLE})
+_RE_SPACE_RUN = re.compile(r'\s+')
+
+
+def norm_title(text: str) -> str:
+    """标题规范化：PDF伪影清理 + Unicode引号/破折号统一 + 小写 + 空格/下划线折叠 + 去尾标点。
+
+    公共实现（title_cache / web_services 原各有一份完全相同的 _norm_title）。
+    """
+    return _RE_SPACE_RUN.sub(' ', text.translate(TITLE_NORM_TABLE)
+                             .lower().replace('_', ' ')).strip().rstrip(' .;:')
 
 
 def repair_doi_text(text: str) -> str:

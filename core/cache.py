@@ -1,6 +1,7 @@
 """通用 JSON 缓存与文本读取工具（跨模块共享的公共 IO 逻辑）。"""
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 _ENC_AUTO = ('utf-8', 'gbk')
@@ -29,9 +30,9 @@ def read_text_auto(path: Path) -> str:
     data = Path(path).read_bytes()
     for enc in _ENC_AUTO:
         try:
-            return data.decode(enc).lstrip('\ufeff')
+            return data.decode(enc).lstrip('﻿')
         except UnicodeDecodeError:
-            continue
+            pass
     return data.decode('utf-8', errors='replace')
 
 
@@ -41,3 +42,9 @@ def read_text_safe(path: Path, encoding: str = 'utf-8') -> str:
         return Path(path).read_text(encoding=encoding)
     except Exception:
         return ''
+
+
+def read_texts_batch(paths) -> list:
+    """并行批量读取文本（保持输入顺序）；单文件失败为 ''（read_text_safe 语义）。"""
+    with ThreadPoolExecutor() as ex:
+        return list(ex.map(read_text_safe, paths))

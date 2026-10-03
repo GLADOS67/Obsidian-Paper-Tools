@@ -1,11 +1,10 @@
 import shutil
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from core.cache import read_text_safe
+from core.cache import read_texts_batch
 from core.doi import PATTERN_DOI as DOI_RE
 from core.frontmatter import dump_frontmatter, parse_frontmatter_batch
 from core.obsidian_path import SM_QUICK
@@ -104,8 +103,7 @@ def _find_pa(clip_stem: str, pa_index: Dict[str, Path],
             doi_memo[doi] = next(
                 ((pa_index[s], pa_alias.get(s), 'doi') for s, t in pa_text.items() if doi in t),
                 None)
-        found = doi_memo[doi] or (None, None, '')
-        if found[0]:
+        if found := doi_memo[doi]:
             return found
     if result := _fuzzy_best(underscore_stem.lower(), pa_keys, buckets=pa_buckets):
         return result[0], pa_alias.get(result[0].stem), 'fuzzy'
@@ -295,8 +293,7 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     claude_dir = base / 'Claude'
     if claude_dir.is_dir():
         claude_mds = sorted(claude_dir.rglob('*.md'))
-        with ThreadPoolExecutor() as ex:  # IO并行读取正文
-            claude_texts = list(ex.map(read_text_safe, claude_mds))
+        claude_texts = read_texts_batch(claude_mds)  # IO并行读取正文
         for md, text in zip(claude_mds, claude_texts):
             stem = md.stem
             kind = classify_claude_stem(stem)
@@ -328,8 +325,7 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     trash_fe_source: Dict[str, Path] = {}
     if reconcile_claude and TRASH_CLAUDE.is_dir():
         trash_files = sorted(TRASH_CLAUDE.rglob('*.md'))
-        with ThreadPoolExecutor() as ex:
-            trash_texts = list(ex.map(read_text_safe, trash_files))
+        trash_texts = read_texts_batch(trash_files)
         for md, text in zip(trash_files, trash_texts):
             stem = md.stem
             kind = classify_claude_stem(stem)

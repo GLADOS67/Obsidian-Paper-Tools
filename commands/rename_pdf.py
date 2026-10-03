@@ -3,10 +3,12 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Optional
 
 import fitz
 
-from core.doi import CANONICAL_CHAR_TABLE
+from core.doi import CANONICAL_CHAR_TABLE, norm_title
+from core.title_cache import load_doi_title_cache
 
 JUNK_TITLES = {
     'untitled', 'microsoft word', 'powerpoint', 'slide', 'slides',
@@ -178,11 +180,63 @@ def _sanitize_filename(title):
     return title
 
 
-def _process_one_pdf(pdf_path: Path, names_taken: set, lock: threading.Lock) -> tuple:
+def _first_page_tokens(doc) -> list:
+    text = doc[0].get_text() or ''
+    return [t.rstrip('.,;:') for t in norm_title(text).split()]
+
+
+def _build_frag_index(cache: dict) -> list:
+    out = []
+    for val in cache.values():
+        t = val[0] if isinstance(val, list) and val and isinstance(val[0], str) else (
+            val if isinstance(val, str) else '')
+        if t:
+            out.append((norm_title(t), t))
+    return out
+
+
+def _wakeup_from_cache(title: str, doc, frag_index: list) -> Optional[str]:
+    frag = norm_title(title)
+    if len(frag) < 20:
+        return None
+    frag_toks = [t.rstrip('.,;:') for t in frag.split()]
+    cands = []
+    for norm_cached, full in frag_index:
+        if not norm_cached.startswith(frag):
+            continue
+        rem = norm_cached[len(frag):].strip()
+        if len(rem) < 5:
+            continue
+        cands.append((full, [t.rstrip('.,;:') for t in rem.split()]))
+    if not cands:
+        return None
+    page = _first_page_tokens(doc)
+    nf, best, best_len = len(frag_toks), None, -1
+    for i in range(len(page) - nf + 1):
+        if page[i:i + nf] != frag_toks:
+            continue
+        for full, rem_toks in cands:
+            nr = len(rem_toks)
+            if nr > best_len and page[i + nf:i + nf + nr] == rem_toks:
+                best, best_len = full, nr
+    return best
+
+
+def _process_one_pdf(pdf_path: Path, names_taken: set, lock: threading.Lock,
+                     frag_index: list) -> tuple:
     title = None
     try:
         with fitz.open(pdf_path) as doc:
             title = _get_metadata_title(doc) or _get_first_page_title(doc)
+            title = _clean_title(title) if title else ''
+            if title and not _is_title_junk(title) and frag_index:
+                try:
+                    cached_title = _wakeup_from_cache(title, doc, frag_index)
+                except Exception:
+                    cached_title = None
+                if cached_title:
+                    title = cached_title.rstrip('.')
+                    print(f'  [CACHE] wakeup: {pdf_path.name} -> {title}')
     except Exception as e:
         return ('skip', pdf_path, str(e))
     title = _clean_title(title) if title else ''
@@ -214,12 +268,14 @@ def run_rename_pdf(directory):
         print("No PDF files found (excluding 完成_*)")
         return
 
+    frag_index = _build_frag_index(load_doi_title_cache())
     names_taken = {p.stem for p in pdf_files}
     renamed = skipped = 0
     lock = threading.Lock()
 
     with ThreadPoolExecutor() as ex:
-        futures = {ex.submit(_process_one_pdf, p, names_taken, lock): p for p in pdf_files}
+        futures = {ex.submit(_process_one_pdf, p, names_taken, lock, frag_index): p
+                   for p in pdf_files}
         for fut in as_completed(futures):
             status, src, info = fut.result()
             if status == 'renamed':

@@ -19,9 +19,10 @@ def _restore_missing(images_dir: Path, referenced: set, zip_dir: Path) -> None:
             break
         try:
             with zipfile.ZipFile(zp) as zf:
-                hits = [e for e in zf.namelist() if os.path.basename(e) in missing]
-                for entry in hits:
+                for entry in zf.namelist():  # 单趟遍历：命中缺失图片即提取
                     name = os.path.basename(entry)
+                    if name not in missing:
+                        continue
                     with zf.open(entry) as src, open(images_dir / name, 'wb') as dst:
                         shutil.copyfileobj(src, dst)
                     missing.discard(name)
@@ -47,8 +48,7 @@ def run_trash(path: str) -> None:
     _restore_missing(DEFAULT_IMAGE_PATH, referenced, DEFAULT_ZIP_PATH)
 
     p = Path(path)
-    white = {'.obsidian', 'TRASH'}
-    folders = [f for f in p.iterdir() if f.is_dir() and f.name not in white]
+    folders = [f for f in p.iterdir() if f.is_dir() and f.name not in {'.obsidian', 'TRASH'}]
     if not folders:
         print('没有需要归档的文件夹')
         return
