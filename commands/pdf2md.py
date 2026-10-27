@@ -1,5 +1,3 @@
-import json
-import os
 import re
 import shutil
 import time
@@ -7,14 +5,12 @@ import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from itertools import chain
 from pathlib import Path
-
-from requests.exceptions import JSONDecodeError
 
 from core.cache import map_parallel
 from core.title_cache import (load_doi_title_cache, lookup_doi_by_title,
-                              put_doi_title, save_doi_title_cache)
+                              put_doi_title, save_doi_title_cache,
+                              verify_doi_title)
 from core.web_services import (fetch_references, get_doi_from_citation,
                                load_cite_by_cache, refresh_cited_by,
                                save_cite_by_cache)
@@ -27,54 +23,15 @@ from core.markdown_utils import clean_markdown_body
 from core.refs import (build_existing_dois, canonicalize_stem, new_doi_wikilinks,
                        pin_main_doi, process_existing_references)
 from core import try_copy, iter_vault_dirs
+from core.mineru import (MINERU_API_BASE, URL_PATTERN, IMAGES_PATH_PATTERN,
+                         apply_upload_urls, download_zip, extract_json_data,
+                         find_extracted_files, first_main_doi_from_json,
+                         poll_batch_completion, replace_urls, upload_one)
 from core.pdf_extractor import convert_pdf_to_md, extract_dois_from_pdf
 from config import (CPU_CORES, DEFAULT_IMAGE_PATH, DEFAULT_MD_PATH, DEFAULT_PDF_PATH,
                     DEFAULT_ZIP_PATH, MINERU_TOKEN, OBSIDIAN_ROOT)
 
 _http = get_session()
-
-
-URL_PATTERN = re.compile(
-    r'https?://[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)',
-    re.IGNORECASE
-)
-IMAGES_PATH_PATTERN = re.compile(r'\]\(images/')
-
-
-def extract_text(obj):
-    stack = [obj]
-    while stack:
-        item = stack.pop()
-        if isinstance(item, dict):
-            content = item.get('content')
-            if isinstance(content, str):
-                yield content
-            stack.extend(item.values())
-        elif isinstance(item, list):
-            stack.extend(item)
-        elif isinstance(item, str):
-            yield item
-
-
-def apply_upload_urls(token, files_info, url):
-    headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {token}'}
-    data = {'files': files_info, 'model_version': 'vlm', 'enable_formula': True,
-            'enable_table': True, 'language': 'ch'}
-    status = None
-    try:
-        response = _http.post(url, headers=headers, json=data, timeout=30)
-        status = response.status_code
-        result = response.json()
-    except JSONDecodeError:
-        return {'success': False, 'error': f'JSON解析失败 (HTTP {status})'}
-    except Exception as e:
-        return {'success': False, 'error': str(e)}
-    if not isinstance(result, dict):
-        return {'success': False, 'error': 'API返回类型异常'}
-    if result.get('code') != 0:
-        return {'success': False, 'error': result.get('msg', '未知错误')}
-    return {'success': True, 'batch_id': result['data']['batch_id'],
-            'upload_urls': result['data']['file_urls']}
 
 
 def _append_crossref_refs(fm, rest, main_doi, references, md_name):
@@ -93,40 +50,6 @@ def _append_crossref_refs(fm, rest, main_doi, references, md_name):
         return None
     print(f'已将 {len(references)} 条参考文献添加到 {md_name}')
     return '\n\n## 参考文献\n' + '\n'.join(lines)
-
-
-def _extract_json_data(json_src):
-    if not (json_src and json_src.exists()):
-        return set(), []
-    try:
-        content_data = json.loads(json_src.read_text(encoding='utf-8'))
-    except Exception as e:
-        print(f'读取/解析JSON失败 {json_src}: {e}')
-        return set(), []
-    dois = set()
-    urls = []
-    try:
-        blocks = (block for page in content_data for block in page)
-        for text in chain.from_iterable(extract_text(b) for b in blocks):
-            text = normalize_unicode_dashes(text)
-            dois.update(find_plausible_dois(repair_doi_text(text)))
-            urls.extend(URL_PATTERN.findall(text))
-    except Exception as e:
-        print(f'解析 JSON 内容时出错 {json_src}: {e}')
-    return dois, urls
-
-
-def _replace_urls(content, urls):
-    if not urls:
-        return content
-    unique_urls = sorted(set(urls), key=len, reverse=True)
-    escaped = '|'.join(re.escape(u) for u in unique_urls)
-    return re.sub(
-        rf'(?<!\]\()({escaped})',
-        r'[\1](sslocal://flow/file_open?url=%5C1&flow_extra=eyJsaW5rX3R5cGUiOiJjb2RlX2ludGVycHJldGVyIn0=)',
-        content
-    )
-
 
 
 def _merge_new_dois(fm, all_dois, md_name):
@@ -154,24 +77,47 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, doi_title_c
             return False
 
     dois_md = set(find_plausible_dois(repair_doi_text(content)))
-    json_dois, urls = _extract_json_data(json_src)
-    dois_pdf = extract_dois_from_pdf(pdf_path) if pdf_path else set()
+    json_dois, urls = extract_json_data(json_src)
+    if pdf_path:
+        dois_pdf, pdf_first_doi = extract_dois_from_pdf(pdf_path, with_first=True)
+    else:
+        dois_pdf, pdf_first_doi = set(), None
 
     all_dois = dois_md | json_dois | dois_pdf
     if urls:
-        content = _replace_urls(content, urls)
+        content = replace_urls(content, urls)
     fm, rest = parse_frontmatter_str(content)
-    main_doi = get_main_doi(fm, content, all_dois)
+    title = fm.get('title') or md_dst.stem
+    main_doi = source = None
+    md_cand = None
+    json_cand = None
 
-    if not main_doi and (main_doi := lookup_doi_by_title(md_dst.stem, doi_title_cache)):
-        print(f'PDF文件名→DOI: {main_doi}')
-    if main_doi is None and enable_api_refs and not all_dois:
-        result = get_doi_from_citation(fm.get('title', md_dst.stem), doi_title_cache)
+    # 主DOI定级：缓存 → 缓存交叉验证(MD/JSON/PDF) → MD → JSON → PDF → API
+    if (main_doi := lookup_doi_by_title(title, doi_title_cache)):
+        source = '缓存'
+    if main_doi is None:
+        md_cand = get_main_doi(fm, content)
+        json_cand = first_main_doi_from_json(json_src)
+        for cand in (md_cand, json_cand, pdf_first_doi):
+            if cand and verify_doi_title(cand, title, doi_title_cache):
+                main_doi, source = cand, '缓存验证'
+                break
+    if main_doi is None and md_cand:
+        main_doi, source = md_cand, 'MD'
+    if main_doi is None and json_cand:
+        main_doi, source = json_cand, 'JSON'
+    if main_doi is None and pdf_first_doi:
+        main_doi, source = pdf_first_doi, 'PDF'
+    if main_doi is None and enable_api_refs:
+        result = get_doi_from_citation(title, doi_title_cache)
         main_doi = process_doi(result[0])[0] if result else None
-        print(f'Crossref标题回退{"确认主DOI" if result else "无结果"}: {fm.get("title", md_dst.stem)}')
+        source = result[2] if result else '未匹配'
+    if main_doi:
+        main_doi = process_doi(main_doi)[0]
+        print(f'论文DOI来源: {source} | {main_doi}')
     if main_doi:
         fm['doi'] = main_doi
-        put_doi_title(doi_title_cache, main_doi, fm.get('title', '') or md_dst.stem)
+        put_doi_title(doi_title_cache, main_doi, title)
 
     if enable_cited_by and main_doi:
         if clippings_doi_set is None:
@@ -212,73 +158,6 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, doi_title_c
         print(f'更新MD文件失败 {md_dst}: {e}')
         return False
     return True
-
-
-def _download_zip(zip_url, zip_path, file_name, idx):
-    if zip_path.exists():
-        print(f'[{idx}] ZIP已存在: {file_name}')
-        return idx, True
-    print(f'[{idx}] 下载: {file_name}')
-    try:
-        r = _http.get(zip_url, stream=True, timeout=120)
-        r.raise_for_status()
-        with open(zip_path, 'wb') as fh:  # 流式写盘，避免整包常驻内存
-            for chunk in r.iter_content(1 << 20):
-                fh.write(chunk)
-        return idx, True
-    except Exception as e:
-        print(f'[{idx}] 下载失败: {e}')
-        return idx, False
-
-
-def _poll_batch_completion(batch_id, token, max_wait=1800, expected_count=None):
-    url = f'https://mineru.net/api/v4/extract-results/batch/{batch_id}'
-    headers = {'Authorization': f'Bearer {token}'}
-    start = time.time()
-    files = []
-    while time.time() - start < max_wait:
-        try:
-            resp = _http.get(url, headers=headers, timeout=30)
-        except Exception:
-            seconds = time.time() - start
-            print(f'查询请求异常({seconds:.0f}s)，等待重试')
-            time.sleep(10)
-            continue
-        if resp.status_code != 200:
-            print(f'查询失败，状态码: {resp.status_code}')
-            return None
-        data = resp.json()
-        if data.get('code') != 0:
-            print(f"查询失败: {data.get('msg', '未知错误')}")
-            return None
-        files = data['data']['extract_result']
-        if not files:
-            print('批次无文件数据')
-            return None
-        done = [f for f in files if f['state'] == 'done']
-        failed = sum(1 for f in files if f['state'] == 'failed')
-        target = expected_count or len(files)
-        print(f'完成: {len(done)}/{len(files)}  失败: {failed}  目标: {target}')
-        if len(done) + failed >= target:
-            return done
-        time.sleep(10)
-    print('轮询批次超时，返回已完成文件')
-    return [f for f in files if f['state'] == 'done']
-
-
-def _find_extracted_files(temp_dir):
-    md_src = img_src = json_src = None
-    for root, dirs, files_in_dir in os.walk(temp_dir):
-        if not md_src and 'full.md' in files_in_dir:
-            md_src = Path(root) / 'full.md'
-        if not img_src and 'images' in dirs:
-            img_src = Path(root) / 'images'
-        if not json_src and 'content_list_v2.json' in files_in_dir:
-            json_src = Path(root) / 'content_list_v2.json'
-        if md_src and img_src and json_src:
-            break
-    return md_src, img_src, json_src
-
 
 
 def _move_to_trash(p: Path, trash_dir: Path, label: str) -> None:
@@ -351,7 +230,7 @@ def _process_downloaded_one(idx, f_info, path_zip, path_md0, name_to_path, path_
     try:
         with zipfile.ZipFile(zip_path_, 'r') as z:
             z.extractall(temp_dir)
-        md_src, img_src, json_src = _find_extracted_files(temp_dir)
+        md_src, img_src, json_src = find_extracted_files(temp_dir)
         md_dst = None
         if md_src:
             md_dst = path_md0 / f'{canonicalize_stem(Path(file_name).stem)}.md'
@@ -386,7 +265,7 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
     name_to_path = {Path(f).name: Path(f) for f in (batch_files or [])}
     images_output = images_output or DEFAULT_IMAGE_PATH
     images_output.mkdir(exist_ok=True)
-    files = _poll_batch_completion(batch_id, token, expected_count=len(batch_files or []))
+    files = poll_batch_completion(batch_id, token, expected_count=len(batch_files or []))
     if files is None:
         return
     print(f'批次 {batch_id} 找到 {len(files)} 个文件，所有文件已处理完成')
@@ -396,7 +275,7 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
         for idx, f_info in enumerate(files, 1)
     ]
     with ThreadPoolExecutor(max_workers=min(CPU_CORES * 2, 5)) as executor:
-        futures = {executor.submit(_download_zip, *task): task[3] for task in download_tasks}
+        futures = {executor.submit(download_zip, *task): task[3] for task in download_tasks}
         for future in as_completed(futures):
             future.result()
 
@@ -411,19 +290,6 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
         for fut in futures:
             fut.result()
     print(f'批次 {batch_id} 处理完成！Markdown: {path_md0}，图片: {images_output}')
-
-
-def _upload_one(f, u):
-    try:
-        with open(f, 'rb') as fh:
-            r = _http.put(u, data=fh, timeout=60)
-        # 用 with 确保上传后立即关闭文件句柄，避免占用导致后续标记完成失败
-        if r.status_code == 200:
-            return f
-        print(f'上传失败：{f} | 状态码：{r.status_code}')
-    except Exception as e:
-        print(f'上传异常：{f} | 错误：{e}')
-    return None
 
 
 def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
@@ -510,7 +376,7 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
     total_success = 0
     batch_ids = []
     batch_file_map = {}
-    url = 'https://mineru.net/api/v4/file-urls/batch'
+    url = f'{MINERU_API_BASE}/file-urls/batch'
     for batch_idx, batch_files in enumerate(batches, 1):
         print(f'处理批次 {batch_idx}/{len(batches)}')
         files_info = [{'name': Path(f).name, 'data_id': str(uuid.uuid4()), 'is_ocr': False}
@@ -524,7 +390,7 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
         print(f'批次 {batch_idx} 申请链接成功 | batch_id：{bid}')
 
         with ThreadPoolExecutor(max_workers=min(CPU_CORES * 2, 5)) as ex:
-            uploaded_files = [f for f in ex.map(_upload_one, batch_files, url_result['upload_urls']) if f]
+            uploaded_files = [f for f in ex.map(upload_one, batch_files, url_result['upload_urls']) if f]
         batch_file_map[bid] = uploaded_files
         total_success += len(uploaded_files)
         print(f'批次 {batch_idx} 上传完成 | 成功：{len(uploaded_files)}/{len(batch_files)}')

@@ -52,9 +52,10 @@ def _api_get(url: str, params: dict = None, timeout: int = 10) -> Optional[dict]
 
 
 def get_doi_from_citation(citation_text: str, cache: dict = None,
-                          lock: threading.Lock = None) -> Optional[Tuple[str, str]]:
+                          lock: threading.Lock = None) -> Optional[Tuple[str, str, str]]:
     """标题/引用文本 → DOI。先查 Doi_Title_cache（精确→模糊0.95），miss 才请求 Crossref。
 
+    返回 (doi, title, source)，source ∈ {'缓存', '联网'}（缓存命中或 Crossref 联网获取）。
     Crossref 返回结果经相似度门控（≥_CROSSREF_SIM 或子串命中）才接受，
     防止 query.title 误匹配把类似标题挂到错误 DOI 上（污染源头）。
     """
@@ -65,7 +66,7 @@ def get_doi_from_citation(citation_text: str, cache: dict = None,
             val = cache.get(cached_doi)
         title = val[0] if isinstance(val, list) and val and isinstance(val[0], str) else ''
         print(f'缓存命中标题→DOI: {cached_doi}')
-        return cached_doi, title
+        return cached_doi, title, '缓存'
     norm_cit = norm_title(citation_text)
     if len(norm_cit) < 4:
         return None
@@ -97,7 +98,7 @@ def get_doi_from_citation(citation_text: str, cache: dict = None,
         print(f'Crossref结果无DOI: {title[:80]}')
         return None
     put_doi_title(cache, doi, title, lock)
-    return doi, title
+    return doi, title, '联网'
 
 
 def _ref_entry(ref: dict, doi: str) -> Dict:
@@ -112,11 +113,13 @@ def fetch_references(doi: str, cache: dict = None) -> Tuple[List[Dict], Optional
     返回 (refs, year)：year 来自消息 issued.date-parts[0][0]（无则 None）；refs 不缓存。
     """
     cache = cache or {}
-    print(f'正在从Crossref拉取数据: {doi}')
     data = _api_get(f'{CROSSREF_API_BASE}/{doi}', timeout=100)
     if not data:
+        print(f'Crossref获取失败: {doi}')
         return [], None
     msg = data.get('message', {})
+    ctitle = (msg.get('title') or [''])[0] or '(无标题)'
+    print(f'从 {ctitle} 获取doi: {doi}')
     try:
         year = msg.get('issued', {}).get('date-parts', [[None]])[0][0]
     except Exception:
@@ -140,7 +143,7 @@ def fetch_references(doi: str, cache: dict = None) -> Tuple[List[Dict], Optional
             for fut in as_completed(futures):
                 ref = futures[fut]
                 if result := fut.result():
-                    print(f'补全成功: {result[0]}')
+                    print(f'补全成功[{result[2]}]: {result[0]}')
                     refs_with_doi.append(_ref_entry(ref, result[0]))
 
     print(f'拉取到 {len(refs_with_doi)} 条参考文献')

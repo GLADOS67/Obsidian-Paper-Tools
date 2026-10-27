@@ -133,3 +133,20 @@ def lookup_doi_by_title(title: str, cache: dict = None,
             if best and best_score >= _FUZZY_THRESHOLD:
                 return best
     return None
+
+
+def verify_doi_title(doi: str, title: str, cache: dict = None,
+                     lock: threading.Lock = None,
+                     threshold: float = _EXACT_SIM) -> bool:
+    """缓存交叉验证：DOI 在 Doi_Title_cache 中且缓存标题与给定标题规范化相似度≥阈值。
+    畸形条目（无标题/非字符串）自动拒绝；不发 API。"""
+    if not doi or not title:
+        return False
+    cache = cache or {}
+    with lock or TITLE_LOCK:
+        val = cache.get(doi)
+    cached_title = cache_entry_title(val)
+    if not cached_title:
+        return False
+    return SequenceMatcher(None, norm_title(title),
+                           norm_title(cached_title)).ratio() >= threshold

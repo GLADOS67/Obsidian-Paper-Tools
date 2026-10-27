@@ -175,7 +175,7 @@ def _sanitize_filename(title):
 
 def _first_page_tokens(doc) -> list:
     text = doc[0].get_text() or ''
-    return [t.rstrip('.,;:') for t in norm_title(text).split()]
+    return [t for t in (t.rstrip('.,;:') for t in norm_title(text).split()) if t]
 
 
 def _build_frag_index(cache: dict) -> dict:
@@ -193,7 +193,7 @@ def _wakeup_from_cache(title: str, doc, frag_index: dict) -> Optional[str]:
     frag = norm_title(title)
     if len(frag) < 20:
         return None
-    frag_toks = [t.rstrip('.,;:') for t in frag.split()]
+    frag_toks = [t for t in (t.rstrip('.,;:') for t in frag.split()) if t]
     cands = []
     # startswith(frag) 蕴含首词相同，仅需遍历 frag 首词所在分桶（结果与全量扫描一致）
     for norm_cached, full in frag_index.get(frag.split()[0], ()):
@@ -202,7 +202,7 @@ def _wakeup_from_cache(title: str, doc, frag_index: dict) -> Optional[str]:
         rem = norm_cached[len(frag):].strip()
         if len(rem) < 5:
             continue
-        cands.append((full, [t.rstrip('.,;:') for t in rem.split()]))
+        cands.append((full, [t for t in (t.rstrip('.,;:') for t in rem.split()) if t]))
     if not cands:
         return None
     page = _first_page_tokens(doc)

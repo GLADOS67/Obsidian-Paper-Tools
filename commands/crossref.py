@@ -65,7 +65,7 @@ def _resolve_doi_by_title(title: str, md_title: str, cache: dict) -> Optional[st
     candidate = get_doi_from_citation(title, cache)
     if not candidate:
         return None
-    doi, crossref_title = candidate
+    doi, crossref_title, _ = candidate
     if not crossref_title or not md_title:
         print(f'标题→DOI: {doi}')
         return doi

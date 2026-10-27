@@ -124,7 +124,7 @@ def doi_from_doi_line(content: str) -> Optional[str]:
     return None
 
 
-def get_main_doi(fm: dict, content: str, all_dois: set = None) -> Optional[str]:
+def get_main_doi(fm: dict, content: str) -> Optional[str]:
     if main := extract_doi_from_frontmatter(fm):
         return main
     if doi := doi_from_doi_line(content):
@@ -133,8 +133,6 @@ def get_main_doi(fm: dict, content: str, all_dois: set = None) -> Optional[str]:
     for m in PATTERN_DOI.finditer(content):
         if is_plausible_doi(d := m.group(0)):
             return process_doi(d)[0]
-    if all_dois:
-        return process_doi(next(iter(all_dois)))[0]
     return None
 
 

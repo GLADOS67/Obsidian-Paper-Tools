@@ -211,6 +211,27 @@ def _get_figure_urls(pmcid):
     return mapping
 
 
+def _collect_fig_hrefs(root) -> list:
+    """收集全文所有 `<fig>` 首个 `<graphic xlink:href>`（与 _fig_md 取值一致，去重保序）。"""
+    hrefs = []
+    for fig in root.iter():
+        if _local(fig.tag) != 'fig':
+            continue
+        graphic = next((g for g in fig.iter() if _local(g.tag) == 'graphic'), None)
+        href = graphic.get(XLINK) if graphic is not None else None
+        if href and href not in hrefs:
+            hrefs.append(href)
+    return hrefs
+
+
+def _prefetch_figure_urls(pmcid: str, hrefs: list) -> None:
+    """写文件前预取图 URL 映射（单次抓取，复用 FIG_URL_CACHE）；未命中图保留保底链接。"""
+    mapping = _get_figure_urls(pmcid)
+    hit = sum(1 for h in hrefs if h in mapping)
+    print(f'[图预取] {pmcid}: 命中 {hit}/{len(hrefs)}'
+          + ('' if hit == len(hrefs) else '，未命中图保留保底链接'))
+
+
 # ── JATS XML → MD ─────────────────────────────────────────
 
 def _local(tag):
@@ -527,6 +548,14 @@ def run_pmce(input_arg, path, no_graph=False, dry_run=False):
         if xml is None:
             non_oa.append(meta)
             continue
+        try:
+            root = ET.fromstring(xml)
+        except Exception:
+            root = None
+        if root is not None:
+            hrefs = _collect_fig_hrefs(root)
+            if hrefs:
+                _prefetch_figure_urls(meta['pmcid'], hrefs)
         try:
             target.write_text(_compose_md(meta, xml), encoding='utf-8')
             written.append((meta, target))

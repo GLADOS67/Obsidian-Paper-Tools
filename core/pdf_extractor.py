@@ -45,26 +45,33 @@ def _pdf_pages(pdf_path) -> list:
                 for page in pdf.pages]
 
 
-def extract_dois_from_pdf(pdf_path, timeout=60):
+def extract_dois_from_pdf(pdf_path, timeout=60, with_first=False):
+    """三路DOI收集的PDF源：返回全部plausible DOI集合；
+    with_first=True 时返回 (集合, 首个DOI)（按页序首次出现，供主DOI定级），单次进程池扫描。"""
+    empty = (set(), None) if with_first else set()
     if not (pdf_path and pdf_path.exists()):
-        return set()
+        return empty
     try:
         pages = _get_pool().apply_async(_pdf_pages, (pdf_path,)).get(timeout=timeout)
     except TimeoutError:
         print(f'PDF文本提取超时({timeout}s)，跳过 {pdf_path.name}')
-        return set()
+        return empty
     except Exception as e:
         print(f'从PDF提取DOI失败 {pdf_path.name}: {e}')
-        return set()
+        return empty
     if not pages:
-        return set()
-    return {
-        d
-        for page_text in pages
-        for section in _RE_BLANK_SPLIT.split(page_text)
-        for d in find_plausible_dois(repair_doi_text(section.replace('\n', ' ')))
-        if len(d) <= _MAX_DOI_LEN
-    }
+        return empty
+    dois = set()
+    first = None
+    for page_text in pages:
+        for section in _RE_BLANK_SPLIT.split(page_text):
+            for d in find_plausible_dois(repair_doi_text(section.replace('\n', ' '))):
+                if len(d) > _MAX_DOI_LEN:
+                    continue
+                if first is None:
+                    first = d
+                dois.add(d)
+    return (dois, first) if with_first else dois
 
 
 def extract_first_doi_from_pdf(pdf_path):
