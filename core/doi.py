@@ -46,6 +46,7 @@ TITLE_NORM_TABLE = str.maketrans({**{ord(c): None for c in _PDF_ARTIFACT_CHARS},
 _RE_SPACE_RUN = re.compile(r'\s+')
 
 
+@lru_cache(maxsize=8192)  # 标题规范化纯函数：跨文件重复标题免重复 translate/lower
 def norm_title(text: str) -> str:
     """标题规范化：PDF伪影清理 + Unicode引号/破折号统一 + 小写 + 空格/下划线折叠 + 去尾标点。
 

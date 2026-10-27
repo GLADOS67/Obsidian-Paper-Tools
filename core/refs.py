@@ -10,6 +10,7 @@ def canonicalize_stem(stem: str) -> str:
     return stem.translate(CANONICAL_CHAR_TABLE)
 
 
+@lru_cache(maxsize=None)  # 纯函数；match/reconcile 对同一批 stem 反复分类
 def classify_claude_stem(stem: str) -> str:
     """Claude 目录笔记分类：'zh' (zh-CN 译文) / 'fe' (*_figures) / 'pa'（普通 PA 笔记）。
 
@@ -44,16 +45,17 @@ def first_ref_target(ref_list: list) -> Optional[str]:
     return extract_wikilink_name(ref_list[0]) if ref_list else None
 
 
+def _ref_target(ref: str) -> str:
+    """wikilink 引用 → 显示部分（非 wikilink 原样返回）。"""
+    m = WIKILINK_RE.search(ref.replace('\n', ' '))
+    return m.group(2) if m else ref
+
+
 def extract_doi_set(ref_list: list) -> set:
     if not ref_list:
         return set()
-
-    def _target(ref: str) -> str:
-        m = WIKILINK_RE.search(ref.replace('\n', ' '))
-        return m.group(2) if m else ref
-
     return {d for ref in ref_list if isinstance(ref, str)
-            for d in PATTERN_DOI.findall(_target(ref))}
+            for d in PATTERN_DOI.findall(_ref_target(ref))}
 
 
 _STEM_PREFIX_RE = re.compile(r'^\d+_?\s*')
@@ -82,16 +84,11 @@ def norm_stems(stem: str) -> set:
 @lru_cache(maxsize=None)  # 纯函数；调用方（reconcile）仅迭代不修改返回值
 def pa_stem_variants(pa_stem: str) -> list:
     variants = [pa_stem]
-    stripped = _STEM_PREFIX_RE.sub('', pa_stem)
-    if stripped and stripped != pa_stem:
+    if (stripped := _STEM_PREFIX_RE.sub('', pa_stem)) and stripped != pa_stem:
         variants.append(stripped)
-    for v in list(variants):
-        if '_' in v:
-            variants.append(v.replace('_', ' '))
-        elif ' ' in v:
-            variants.append(v.replace(' ', '_'))
-    seen = set()
-    return [x for x in variants if not (x in seen or seen.add(x))]
+    variants += [v.replace('_', ' ') if '_' in v else v.replace(' ', '_')
+                 for v in list(variants) if '_' in v or ' ' in v]
+    return list(dict.fromkeys(variants))
 
 
 def split_wikilink(ref: str) -> Optional[Tuple[str, str]]:

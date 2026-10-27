@@ -21,6 +21,16 @@ _FUZZY_THRESHOLD = 0.95
 _EXACT_SIM = 0.9  # lookup 精确命中后 title/norm 一致性下限（防畸形条目）
 
 
+def cache_entry_title(val) -> str:
+    """Doi_Title_cache 条目 → 标题字符串（list 取 [0]，str 直取，其余空串）。
+
+    公共实现（本模块 3 处 + rename_pdf 原各有一份相同的三元取值链）。
+    """
+    if isinstance(val, list):
+        return val[0] if val and isinstance(val[0], str) else ''
+    return val if isinstance(val, str) else ''
+
+
 def load_doi_title_cache() -> Dict:
     cache = load_cache(DOI_TITLE_CACHE)
     _rebuild_title_reverse(cache)
@@ -42,16 +52,12 @@ def _rebuild_title_reverse(cache: dict) -> None:
     _TITLE_REVERSE.clear()
     _TITLE_BUCKETS.clear()
     for doi, val in cache.items():
-        if isinstance(val, list) and val:
-            title = val[0] if isinstance(val[0], str) else ''
-            norm = val[1] if len(val) >= 2 and isinstance(val[1], str) else ''
-        elif isinstance(val, str):
-            title, norm = val, ''
-        else:
+        title = cache_entry_title(val)
+        if not title:
             continue
-        if title:
-            _index_title(norm or norm_title(title), doi)
-            _index_title(title.lower(), doi)
+        norm = val[1] if isinstance(val, list) and len(val) >= 2 and isinstance(val[1], str) else ''
+        _index_title(norm or norm_title(title), doi)
+        _index_title(title.lower(), doi)
 
 
 def put_doi_title(cache: dict, doi: str, title: str, lock: threading.Lock = None,
@@ -75,7 +81,7 @@ def put_doi_title(cache: dict, doi: str, title: str, lock: threading.Lock = None
     with lock or TITLE_LOCK:
         val = cache.get(doi)
         if isinstance(val, list) and val:
-            old = val[0] if isinstance(val[0], str) else ''
+            old = cache_entry_title(val)
             if (force and title) or (not old and title):
                 val[0] = title
                 if len(val) >= 2:
@@ -88,7 +94,7 @@ def put_doi_title(cache: dict, doi: str, title: str, lock: threading.Lock = None
         else:
             cache[doi] = [title, norm_title(title)] if title else ['', '']
         cur = cache[doi]
-        t = cur[0] if isinstance(cur, list) and cur else ''
+        t = cache_entry_title(cur)
         if t:
             n = cur[1] if isinstance(cur, list) and len(cur) >= 2 and isinstance(cur[1], str) else ''
             _index_title(n or norm_title(t), doi)
@@ -107,8 +113,7 @@ def lookup_doi_by_title(title: str, cache: dict = None,
         if hit := _TITLE_REVERSE.get(norm):
             hit_doi = hit[0]
             val = cache.get(hit_doi) if cache is not None else None
-            cached_title = (val[0] if isinstance(val, list) and val and isinstance(val[0], str) else
-                            val if isinstance(val, str) else '')
+            cached_title = cache_entry_title(val)
             if cached_title and SequenceMatcher(None, norm, norm_title(cached_title)).ratio() >= _EXACT_SIM:
                 return hit_doi
             # title/norm 不一致（畸形条目）→ 视为可疑，落入模糊匹配

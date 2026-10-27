@@ -6,6 +6,13 @@ from pathlib import Path
 
 _ENC_AUTO = ('utf-8', 'gbk')
 
+_executor = ThreadPoolExecutor()  # 共享线程池：复用 pdf_extractor 惰性单例池模式，线程按需创建
+
+
+def map_parallel(fn, *iterables) -> list:
+    """共享线程池并行 map（保持输入顺序，异常在返回时抛出）。"""
+    return list(_executor.map(fn, *iterables))
+
 
 def load_cache(path: Path) -> dict:
     """读取 JSON 缓存文件，异常或非 dict 返回空 dict。"""
@@ -46,5 +53,4 @@ def read_text_safe(path: Path, encoding: str = 'utf-8') -> str:
 
 def read_texts_batch(paths) -> list:
     """并行批量读取文本（保持输入顺序）；单文件失败为 ''（read_text_safe 语义）。"""
-    with ThreadPoolExecutor() as ex:
-        return list(ex.map(read_text_safe, paths))
+    return map_parallel(read_text_safe, paths)

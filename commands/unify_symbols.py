@@ -1,10 +1,10 @@
 import re
-from concurrent.futures import ThreadPoolExecutor
 from itertools import repeat
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 
 from core import iter_vault_dirs
+from core.cache import map_parallel
 from core.refs import canonicalize_stem
 
 _WIKILINK_RE = re.compile(r'\[\[([^|#\]\n]+)([|#][^\]\n]*)?\]\]')
@@ -87,13 +87,12 @@ def run_unify_symbols(vault_root: str = r'C:\Vault', dry_run: bool = True) -> bo
 
     link_map = {**{v: v for v in changed.values()}, **changed}
     total_links = 0
-    with ThreadPoolExecutor() as ex:  # 并行读写，ex.map 保证输出顺序与串行一致
-        for result in ex.map(_fix_one, md_files, repeat(link_map)):
-            if result is None:
-                continue
-            md, link_count = result
-            total_links += link_count
-            print(f'  [{link_count} links] {md.relative_to(vault_root)}')
+    for result in map_parallel(_fix_one, md_files, repeat(link_map)):  # 并行读写，保持输出顺序
+        if result is None:
+            continue
+        md, link_count = result
+        total_links += link_count
+        print(f'  [{link_count} links] {md.relative_to(vault_root)}')
 
     renames = 0
     for md, new_stem in changed_paths:

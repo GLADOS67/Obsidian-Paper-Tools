@@ -1,14 +1,15 @@
 import os
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from itertools import repeat
 from pathlib import Path
 from typing import Optional
 
 import fitz
 
+from core.cache import map_parallel
 from core.doi import CANONICAL_CHAR_TABLE, norm_title
-from core.title_cache import load_doi_title_cache
+from core.title_cache import cache_entry_title, load_doi_title_cache
 
 JUNK_TITLES = {
     'untitled', 'microsoft word', 'powerpoint', 'slide', 'slides',
@@ -45,6 +46,9 @@ MSID_RE = re.compile(
 )
 SOURCE_EXT_RE = re.compile(r'\.(?:qxd|indd|docx?|pptx?|ai|cdr|psd|pub|idml)\b', re.IGNORECASE)
 STATUS_SET = frozenset(STATUS_MARKERS)
+# 平铺页标题块跳过词（原 _extract_from_flat_page 每次调用重建的局部常量，提升模块级）
+FLAT_SKIP_TERMS = frozenset(('department', 'university', 'school of', 'hospital',
+                             'institute', 'corresponding author'))
 ET_AL_RE = re.compile(r',?\s+et\s+al\.?\s*$', re.IGNORECASE)
 WS_RE = re.compile(r'\s+')
 _FILENAME_STRIP_TABLE = str.maketrans({c: '' for c in r'<>:"/\|?*'})
@@ -89,22 +93,12 @@ def _clean_title(raw_title):
 
 
 def _get_metadata_title(doc):
-    title = doc.metadata.get('title', '')
-    if not title:
-        return None
-    title = title.strip()
-    if _is_title_junk(title):
-        return None
-    if MSID_RE.search(title):
-        return None
-    if SOURCE_EXT_RE.search(title):
-        return None
-    if title.isupper() and len(title) > 20:
+    title = (doc.metadata.get('title') or '').strip()
+    if (_is_title_junk(title) or MSID_RE.search(title) or SOURCE_EXT_RE.search(title)
+            or (title.isupper() and len(title) > 20)):
         return None
     title = _clean_title(title)
-    if not title or _is_title_junk(title):
-        return None
-    return title
+    return title if title and not _is_title_junk(title) else None
 
 
 def _get_first_page_title(doc):
@@ -157,13 +151,12 @@ def _extract_from_flat_page(spans, page_h):
     if cur:
         blocks.append(cur)
 
-    SKIP_TERMS = frozenset(('department', 'university', 'school of', 'hospital', 'institute', 'corresponding author'))
     good = []
     for blk in blocks:
         combined = ' '.join(t for _, t in blk).lower()
         if any(m in combined for m in STATUS_SET) or DOI_RE.search(combined) or AUTHOR_DEGREE_RE.search(combined):
             continue
-        if not any(kw in combined for kw in SKIP_TERMS) and len(combined) >= 20:
+        if not any(kw in combined for kw in FLAT_SKIP_TERMS) and len(combined) >= 20:
             good.append(blk)
     if not good:
         return None
@@ -185,23 +178,25 @@ def _first_page_tokens(doc) -> list:
     return [t.rstrip('.,;:') for t in norm_title(text).split()]
 
 
-def _build_frag_index(cache: dict) -> list:
-    out = []
+def _build_frag_index(cache: dict) -> dict:
+    """标题前缀索引：按规范化标题首词分桶，_wakeup_from_cache 免全量线性扫描。"""
+    index = {}
     for val in cache.values():
-        t = val[0] if isinstance(val, list) and val and isinstance(val[0], str) else (
-            val if isinstance(val, str) else '')
-        if t:
-            out.append((norm_title(t), t))
-    return out
+        if not (t := cache_entry_title(val)):
+            continue
+        if nt := norm_title(t):
+            index.setdefault(nt.split()[0], []).append((nt, t))
+    return index
 
 
-def _wakeup_from_cache(title: str, doc, frag_index: list) -> Optional[str]:
+def _wakeup_from_cache(title: str, doc, frag_index: dict) -> Optional[str]:
     frag = norm_title(title)
     if len(frag) < 20:
         return None
     frag_toks = [t.rstrip('.,;:') for t in frag.split()]
     cands = []
-    for norm_cached, full in frag_index:
+    # startswith(frag) 蕴含首词相同，仅需遍历 frag 首词所在分桶（结果与全量扫描一致）
+    for norm_cached, full in frag_index.get(frag.split()[0], ()):
         if not norm_cached.startswith(frag):
             continue
         rem = norm_cached[len(frag):].strip()
@@ -223,7 +218,7 @@ def _wakeup_from_cache(title: str, doc, frag_index: list) -> Optional[str]:
 
 
 def _process_one_pdf(pdf_path: Path, names_taken: set, lock: threading.Lock,
-                     frag_index: list) -> tuple:
+                     frag_index: dict) -> tuple:
     title = None
     try:
         with fitz.open(pdf_path) as doc:
@@ -273,17 +268,16 @@ def run_rename_pdf(directory):
     renamed = skipped = 0
     lock = threading.Lock()
 
-    with ThreadPoolExecutor() as ex:
-        futures = {ex.submit(_process_one_pdf, p, names_taken, lock, frag_index): p
-                   for p in pdf_files}
-        for fut in as_completed(futures):
-            status, src, info = fut.result()
-            if status == 'renamed':
-                renamed += 1
-                print(f'  {src.name} -> {info}')
-            else:
-                skipped += 1
-                tag, sep = ('Rename failed', ' -> ') if status == 'failed' else ('Skip', ' | ')
-                print(f'  {tag}: {src.name}{sep}{info}')
+    # 共享线程池（core.cache map_parallel）：复用线程免每轮重建，默认并发度与原 ThreadPoolExecutor() 一致
+    results = map_parallel(_process_one_pdf, pdf_files, repeat(names_taken),
+                           repeat(lock), repeat(frag_index))
+    for status, src, info in results:
+        if status == 'renamed':
+            renamed += 1
+            print(f'  {src.name} -> {info}')
+        else:
+            skipped += 1
+            tag, sep = ('Rename failed', ' -> ') if status == 'failed' else ('Skip', ' | ')
+            print(f'  {tag}: {src.name}{sep}{info}')
 
     print(f"Total: {total}  Renamed: {renamed}  Skipped: {skipped}")

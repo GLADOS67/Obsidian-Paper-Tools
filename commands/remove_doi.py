@@ -1,7 +1,7 @@
-from concurrent.futures import ThreadPoolExecutor
 from itertools import repeat
 from pathlib import Path
 
+from core.cache import map_parallel
 from core.doi import make_wikilink
 
 
@@ -12,17 +12,14 @@ def _process_one(md_file: Path, wikilink: str) -> tuple:
         return None
     if wikilink not in content:
         return None
+    # wikilink 不含换行符，命中即必有整行包含，len 差即为删除行数（无需二次校验）
     lines = content.split('\n')
-    filtered = [l for l in lines if wikilink not in l]
-    diff = len(lines) - len(filtered)
-    if not diff:
-        return None
-    md_file.write_text('\n'.join(filtered), encoding='utf-8')
-    return (md_file, diff)
+    kept = [l for l in lines if wikilink not in l]
+    md_file.write_text('\n'.join(kept), encoding='utf-8')
+    return md_file, len(lines) - len(kept)
 
 
 def run_remove_doi(directory: str, doi: str) -> list:
     target = Path(directory)
     wikilink = make_wikilink(doi)
-    with ThreadPoolExecutor() as ex:
-        return [r for r in ex.map(_process_one, target.rglob('*.md'), repeat(wikilink)) if r]
+    return [r for r in map_parallel(_process_one, target.rglob('*.md'), repeat(wikilink)) if r]

@@ -18,14 +18,14 @@ from pathlib import Path
 
 from curl_cffi import requests as curl_requests
 
-from core.cache import read_text_auto
+from core.cache import map_parallel, read_text_auto
 from core.title_cache import load_doi_title_cache, put_doi_title, save_doi_title_cache
 from core.doi import (PATTERN_DOI, PATTERN_FS_INVALID, PATTERN_SAFE_DOI,
                       find_plausible_dois, normalize_unicode_dashes, process_doi)
 from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.http import get_session, polite_sleep
 from core.refs import pin_main_doi, split_wikilink
-from core.similarity import ratio_gate_passes
+from core.similarity import BUCKET_WIDTH, bucket_candidates, ratio_gate_passes
 from commands.markdown_graph import run_markdown_graph
 
 EUPMC_BASE = 'https://www.ebi.ac.uk/europepmc/webservices/rest'
@@ -40,6 +40,8 @@ PATTERN_LINE_JUNK = re.compile(r'[|\[\]()*#-]')
 PATTERN_HTML_TAG = re.compile(r'<[^>]+>')
 PATTERN_INLINE_DOI = re.compile(r'\s*doi:\s*10\.\d{4,9}/[-A-Za-z0-9._;()/:]+', re.IGNORECASE)
 PATTERN_TEX_BODY = re.compile(r'\\begin\{document\}(.+?)\\end\{document\}', re.DOTALL)
+PATTERN_DOUBLE_DOT = re.compile(r'\.\s*\.')
+PATTERN_FIG_NUM = re.compile(r'(\d+)')
 _TITLE_SIM = 0.5
 _CHUNK = 40
 
@@ -126,44 +128,49 @@ def _query_clause(kind, val):
     return f'TITLE:"{val}"'
 
 
+def _fetch_chunk(chunk, idx):
+    resp = _eupmc_get(f'{EUPMC_BASE}/search', {
+        'query': ' OR '.join(_query_clause(k, v) for k, v in chunk),
+        'format': 'json', 'resultType': 'core', 'pageSize': 100,
+    })
+    if resp is None:
+        print(f'元数据批次 {idx} 请求失败')
+        return []
+    return resp.json().get('resultList', {}).get('result', [])
+
+
 def _fetch_metadata(items):
-    results = []
-    for i in range(0, len(items), _CHUNK):
-        chunk = items[i:i + _CHUNK]
-        resp = _eupmc_get(f'{EUPMC_BASE}/search', {
-            'query': ' OR '.join(_query_clause(k, v) for k, v in chunk),
-            'format': 'json', 'resultType': 'core', 'pageSize': 100,
-        })
-        if resp is None:
-            print(f'元数据批次 {i // _CHUNK + 1} 请求失败')
-            continue
-        results.extend(resp.json().get('resultList', {}).get('result', []))
-        if i + _CHUNK < len(items):
-            polite_sleep()
-    return results
+    """分块并行拉取元数据（map 保序，结果与串行一致）；批间礼貌延迟合并为一次。"""
+    chunks = [items[i:i + _CHUNK] for i in range(0, len(items), _CHUNK)]
+    if not chunks:
+        return []
+    polite_sleep()
+    return [r for part in map_parallel(_fetch_chunk, chunks,
+                                       range(1, len(chunks) + 1)) for r in part]
 
 
 def _build_result_index(results):
-    """全循环构建一次的查询索引：pmid/doi 首命中映射（setdefault 保序）+ 预小写标题列表。"""
-    by_pmid, by_doi, titles = {}, {}, []
+    """全循环构建一次的查询索引：pmid/doi 首命中映射（setdefault 保序）+ 标题长度分桶（模糊检索预筛）。"""
+    by_pmid, by_doi, buckets = {}, {}, {}
     for r in results:
         by_pmid.setdefault(r.get('id'), r)
         if doi := r.get('doi'):
             by_doi.setdefault(doi.lower(), r)
-        titles.append(((r.get('title') or '').lower(), r))
-    return by_pmid, by_doi, titles
+        t = (r.get('title') or '').lower()
+        buckets.setdefault(len(t) // BUCKET_WIDTH, []).append((t, r))
+    return by_pmid, by_doi, buckets
 
 
 def _match_one(index, kind, val):
-    by_pmid, by_doi, titles = index
+    by_pmid, by_doi, buckets = index
     lv = val.lower()
     if kind == 'pmid':
         return by_pmid.get(val)
     if kind == 'doi':
         return by_doi.get(lv)
-    # ratio ≤ 2·min(a,b)/(a+b)，长度越界候选必低于阈值，免构造 SequenceMatcher
+    # 长度分桶预筛（复用 similarity.bucket_candidates），命中桶内仍按原门控过滤，结果与全量扫描一致
     ln, best, best_score = len(lv), None, 0.0
-    for title_lower, r in titles:
+    for title_lower, r in bucket_candidates(buckets, ln, _TITLE_SIM):
         if not ratio_gate_passes(ln, len(title_lower), _TITLE_SIM):
             continue
         score = SequenceMatcher(None, title_lower, lv).ratio()
@@ -339,7 +346,7 @@ def _fig_md(fig, pmcid):
         lines.append(f'![{alt}]({img_url})')
     else:
         # 保底查看链接：label 数字 → PMC figure 页，无数字 → 文章页（fig_num 复用于两处拼接）
-        fig_num = re.search(r'(\d+)', alt)
+        fig_num = PATTERN_FIG_NUM.search(alt)
         anchor = f'#F{fig_num.group(1)}' if fig_num else ''
         fig_path = f'/figure/F{fig_num.group(1)}/' if fig_num else '/'
         lines.append(f'**[{alt}](https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}{fig_path})** '
@@ -383,7 +390,7 @@ def _refs_md(root):
                 m = PATTERN_DOI.search(text)
                 doi = process_doi(m.group(0))[0] if m else None
             text = PATTERN_INLINE_DOI.sub('', text)
-            text = re.sub(r'\.\s*\.', '.', text).strip()
+            text = PATTERN_DOUBLE_DOT.sub('.', text).strip()
             lines.append(f'{i}. {text}' + (f' DOI: {doi}' if doi else ''))
     return lines
 

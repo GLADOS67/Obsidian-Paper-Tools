@@ -1,4 +1,5 @@
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -13,6 +14,7 @@ from core.obsidian_path import resolve_input_path, SM_QUICK
 from core.pdf_extractor import extract_first_doi_from_pdf
 from core.refs import (build_existing_dois, new_doi_wikilinks,
                        process_existing_references)
+from config import CPU_CORES
 
 RE_REF_ENTRY = re.compile(r'^\s*(?:\[(\d+)\]|(\d+)\.)\s+(.*)$', re.MULTILINE)
 
@@ -139,14 +141,24 @@ def process_local_references_in_md(md_path: Path, override_main_doi: Optional[st
         return
     ref_entries = RE_REF_ENTRY.findall(content[ref_start:])
     print(f'找到 {len(ref_entries)} 条本地参考文献，处理中...')
+
+    # 无DOI条目并行查Crossref（复用 web_services.fetch_references 的并行补全模式），输出仍按原顺序
+    found = {}
+    with ThreadPoolExecutor(max_workers=min(CPU_CORES * 2, 4)) as ex:
+        futures = {ex.submit(get_doi_from_citation, text, cache): i
+                   for i, (_, _, text) in enumerate(ref_entries)
+                   if not PATTERN_DOI.search(repair_doi_text(text))}
+        for fut in as_completed(futures):
+            if result := fut.result():
+                found[futures[fut]] = result[0]
+
     references = []
-    for num1, num2, text in ref_entries:
+    for i, (num1, num2, text) in enumerate(ref_entries):
         text = text.rstrip('. \t')
         if m := PATTERN_DOI.search(repair_doi_text(text)):
             doi = m.group(0)
         else:
-            result = get_doi_from_citation(text, cache)
-            doi = result[0] if result else None
+            doi = found.get(i)
         if doi:
             display, _ = process_doi(doi)
             print(f'  {num1 or num2}: 找到DOI {display}')

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from requests.exceptions import JSONDecodeError
 
+from core.cache import map_parallel
 from core.title_cache import (load_doi_title_cache, lookup_doi_by_title,
                               put_doi_title, save_doi_title_cache)
 from core.web_services import (fetch_references, get_doi_from_citation,
@@ -162,10 +163,8 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, doi_title_c
     fm, rest = parse_frontmatter_str(content)
     main_doi = get_main_doi(fm, content, all_dois)
 
-    if main_doi is None:
-        main_doi = lookup_doi_by_title(md_dst.stem, doi_title_cache)
-        if main_doi:
-            print(f'PDF文件名→DOI: {main_doi}')
+    if not main_doi and (main_doi := lookup_doi_by_title(md_dst.stem, doi_title_cache)):
+        print(f'PDF文件名→DOI: {main_doi}')
     if main_doi is None and enable_api_refs and not all_dois:
         result = get_doi_from_citation(fm.get('title', md_dst.stem), doi_title_cache)
         main_doi = process_doi(result[0])[0] if result else None
@@ -184,8 +183,7 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, doi_title_c
         fm['reference'] = process_existing_references(existing_refs)
 
     year = fm.get('published')
-    if not isinstance(year, int):
-        year = None
+    year = year if isinstance(year, int) else None
     refs = None
     if main_doi and year is None:
         refs, year = fetch_references(main_doi, doi_title_cache)
@@ -360,8 +358,11 @@ def _process_downloaded_one(idx, f_info, path_zip, path_md0, name_to_path, path_
             shutil.move(str(md_src), str(md_dst))
         if img_src:
             for img_file in img_src.glob('*'):
+                dst_img = images_output / img_file.name
+                if not dst_img.exists() and try_copy(img_file, dst_img):
+                    continue  # 硬链接优先（免整图拷贝），目标已存在或失败回退 copy2（保留覆盖语义）
                 try:
-                    shutil.copy2(img_file, images_output / img_file.name)
+                    shutil.copy2(img_file, dst_img)
                 except Exception:
                     pass
         if md_dst:
@@ -451,10 +452,9 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
     filtered = []
     global_index = {}
     clip_dirs = [c for v in iter_vault_dirs(OBSIDIAN_ROOT) if (c := v / 'Clippings').is_dir()]
-    with ThreadPoolExecutor() as ex:  # 各 vault Clippings 并行 rglob；map 保序，setdefault 优先级不变
-        for mds in ex.map(lambda c: list(c.rglob('*.md')), clip_dirs):
-            for md in mds:
-                global_index.setdefault(md.stem, md)
+    for mds in map_parallel(lambda c: list(c.rglob('*.md')), clip_dirs):  # 各 vault Clippings 并行 rglob
+        for md in mds:
+            global_index.setdefault(md.stem, md)
     print(f'全库已索引: {len(global_index)} 个MD')
     for pdf_file in pdf_files:
         done_path = pdf_file.parent / f'完成_{pdf_file.name}'

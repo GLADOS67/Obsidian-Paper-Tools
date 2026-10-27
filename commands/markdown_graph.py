@@ -1,9 +1,9 @@
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from itertools import repeat
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from core.cache import read_text_auto
+from core.cache import map_parallel, read_text_auto
 from core.title_cache import (load_doi_title_cache, lookup_doi_by_title,
                               put_doi_title, save_doi_title_cache)
 from core.web_services import load_cite_by_cache, save_cite_by_cache
@@ -190,10 +190,11 @@ def _build_maps_from_fms(md_files, fms, unique_map, cited_by_map):
             if not ref:
                 continue
             parsed = split_wikilink(ref)
-            if parsed:
-                display_doi, name_part = process_doi(parsed[1])[0], parsed[0]
-                if is_plausible_doi(display_doi):
-                    _update_doi_map(display_doi, name_part, unique_map, f.stem, slot=0)
+            if not parsed:
+                continue
+            display_doi, name_part = process_doi(parsed[1])[0], parsed[0]
+            if is_plausible_doi(display_doi):
+                _update_doi_map(display_doi, name_part, unique_map, f.stem, slot=0)
         for item in fm.get('cited_by', []):
             if p := _parse_cited_by_entry(item):
                 _record_cited_by(p[0], p[1], f.stem, unique_map, cited_by_map)
@@ -235,6 +236,44 @@ def _print_top_orphans(unique_map: Dict[str, DoiEntry],
         print('未找到符合条件的目前不存在的外部 cited_by DOI')
 
 
+def _finalize_one(file: Path, fm: Dict, rest: str, unique_map: Dict[str, DoiEntry],
+                  doi_title_cache: dict, cite_by_cache: dict, lock: threading.Lock):
+    """单文件最终落盘：重建引用/置PMC/回写被引与缓存/写MD。纯计算并行，缓存写锁内完成。"""
+    raw_refs = fm.get('reference', [])  # 原始引用（重建会替换name，破坏name==stem匹配），self_doi 优先用它解析
+    refs, _ = _rebuild_reference_list(raw_refs, unique_map)
+    fm['reference'] = refs
+    if _pin_pmc_reference(fm, rest, file.stem):
+        print(f'  ✅ PMC协议: {file.name} reference[0] 已置为 [[标题|DOI]]')
+    if fm.get('cited_by'):
+        fm['cited_by'] = _resolve_cited_by(fm['cited_by'], unique_map)
+    self_doi = _resolve_self_doi(file.stem, raw_refs, doi_title_cache)
+    key = self_doi.lower() if self_doi else None
+    citing_stems = ([s for s in unique_map[key][0][1] if s != file.stem]
+                    if (key and key in unique_map) else [])
+    fm['被引'] = [f'[[{s}]]' for s in citing_stems]
+    fm['tags'] = ['正向' if (len(citing_stems) - fm.get('特殊引用数', 0)) > 0 else '负向']
+    fm.pop('引用情况', None)
+    title = fm_title(fm, file.stem)
+    # 保险：不强制 title = 文件名；title 缺失或无效时保留原样，不创建、不覆盖
+    if self_doi and is_plausible_doi(self_doi) and title:
+        put_doi_title(doi_title_cache, self_doi, title)
+        with lock:
+            for ref in refs:
+                ref_doi = wikilink_doi(ref)
+                if not ref_doi or ref_doi.lower() == key or not is_plausible_doi(ref_doi):
+                    continue
+                citing = cite_by_cache.setdefault(ref_doi, [])
+                if self_doi not in citing:
+                    citing.append(self_doi)
+    try:
+        file.write_text(dump_frontmatter(fm, rest), encoding='utf-8')
+        print(f'  ✅ {file.name} 更新完成：被引={len(citing_stems)}篇，标签={fm["tags"][0]}')
+        return file, fm
+    except Exception as e:
+        print(f'  ❌ {file.name} 保存失败 → {str(e)}')
+        return None
+
+
 def run_markdown_graph(directory: str, depth: int = 0) -> None:
     target = Path(directory)
     md_files = sorted(target.rglob('*.md'))
@@ -245,52 +284,21 @@ def run_markdown_graph(directory: str, depth: int = 0) -> None:
 
     unique_map: Dict[str, DoiEntry] = {}
     cited_by_map: Dict[str, Tuple[str, List[str]]] = {}
-    files_data: List[Tuple[Path, Dict, str]] = []
     lock = threading.Lock()
 
-    with ThreadPoolExecutor() as ex:
-        futures = {ex.submit(_process_one_file, f, unique_map, cited_by_map, lock): f for f in md_files}
-        for fut in as_completed(futures):
-            result = fut.result()
-            if result:
-                files_data.append(result)
+    files_data = [r for r in map_parallel(_process_one_file, md_files,
+                                          repeat(unique_map), repeat(cited_by_map),
+                                          repeat(lock)) if r]
 
     print(f'\n已收集到 {len(unique_map)} 个全局DOI标题映射')
     print('\n开始计算引用关系和引用情况并保存文件...')
 
     written_fms: Dict[Path, Dict] = {}  # 写盘成功的最新 fm，供 depth 统计复用（免重复读盘）
-    for file, fm, rest in files_data:
-        raw_refs = fm.get('reference', [])  # 原始引用（重建会替换name，破坏name==stem匹配），self_doi 优先用它解析
-        refs, _ = _rebuild_reference_list(raw_refs, unique_map)
-        fm['reference'] = refs
-        if _pin_pmc_reference(fm, rest, file.stem):
-            print(f'  ✅ PMC协议: {file.name} reference[0] 已置为 [[标题|DOI]]')
-        if fm.get('cited_by'):
-            fm['cited_by'] = _resolve_cited_by(fm['cited_by'], unique_map)
-        self_doi = _resolve_self_doi(file.stem, raw_refs, doi_title_cache)
-        key = self_doi.lower() if self_doi else None
-        citing_stems = list(unique_map[key][0][1]) if (key and key in unique_map) else []
-        citing_stems = [s for s in citing_stems if s != file.stem]
-        fm['被引'] = [f'[[{s}]]' for s in citing_stems]
-        fm['tags'] = ['正向' if (len(citing_stems) - fm.get('特殊引用数', 0)) > 0 else '负向']
-        fm.pop('引用情况', None)
-        title = fm_title(fm, file.stem)
-        # 保险：不强制 title = 文件名；title 缺失或无效时保留原样，不创建、不覆盖
-        if self_doi and is_plausible_doi(self_doi) and title:
-            put_doi_title(doi_title_cache, self_doi, title)
-            for ref in refs:
-                if ref_doi := wikilink_doi(ref):
-                    if ref_doi.lower() == key or not is_plausible_doi(ref_doi):
-                        continue
-                    citing = cite_by_cache.setdefault(ref_doi, [])
-                    if self_doi not in citing:
-                        citing.append(self_doi)
-        try:
-            file.write_text(dump_frontmatter(fm, rest), encoding='utf-8')
-            written_fms[file] = fm
-            print(f'  ✅ {file.name} 更新完成：被引={len(citing_stems)}篇，标签={fm["tags"][0]}')
-        except Exception as e:
-            print(f'  ❌ {file.name} 保存失败 → {str(e)}')
+    if files_data:
+        results = map_parallel(_finalize_one, *zip(*files_data),
+                               repeat(unique_map), repeat(doi_title_cache),
+                               repeat(cite_by_cache), repeat(lock))
+        written_fms = {f: fm for f, fm in results if fm}
 
     save_doi_title_cache(doi_title_cache)
     save_cite_by_cache(cite_by_cache)
@@ -298,9 +306,10 @@ def run_markdown_graph(directory: str, depth: int = 0) -> None:
     if depth > 0:
         # 单次目录树遍历构建 文件夹→md文件 映射，深度随遍历一次算好
         # （原实现每文件夹一次 rglob + 每层级重复 relative_to，重复磁盘遍历与路径计算）
+        # 复用已收集的 md_files（处理仅改写内容、不增删文件，文件集与二次 rglob 一致），免去第二轮全树磁盘遍历
         folder_files: Dict[Path, List[Path]] = {}
         folder_depth: Dict[Path, int] = {}
-        for md_file in target.rglob('*.md'):
+        for md_file in md_files:
             folder = md_file.parent
             d = len(folder.relative_to(target).parts)
             if d > depth:

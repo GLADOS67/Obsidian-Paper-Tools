@@ -1,8 +1,9 @@
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from itertools import repeat
 from pathlib import Path
 from typing import Optional
 
+from core.cache import map_parallel, read_text_auto
 from core.title_cache import load_doi_title_cache, save_doi_title_cache
 from core.web_services import (load_cite_by_cache, refresh_cited_by,
                                save_cite_by_cache)
@@ -30,7 +31,7 @@ def _extract_main_doi(fm: dict, body: str) -> Optional[str]:
 def _process_cited_file(md_file: Path, cite_by_cache: dict, doi_title_cache: dict,
                        existing: set, max_rows: int, lock: threading.Lock) -> None:
     try:
-        content = md_file.read_text(encoding='utf-8')
+        content = read_text_auto(md_file)
     except Exception as e:
         print(f'[ERR] 读取 {md_file.name}: {e}')
         return
@@ -44,9 +45,10 @@ def _process_cited_file(md_file: Path, cite_by_cache: dict, doi_title_cache: dic
         print(f'[SKIP] {md_file.name}: cited_by_date={fm.get("cited_by_date")} (距今<1个月)')
         return
 
+    # 网络查询移出锁（cite_by/doi_title 缓存由模块内部锁保护），锁仅保护 existing 更新 → 查询真正并行
+    citing_dois = refresh_cited_by(fm, main_doi, cite_by_cache,
+                                   doi_title_cache, existing, max_rows) or []
     with lock:
-        citing_dois = refresh_cited_by(fm, main_doi, cite_by_cache,
-                                       doi_title_cache, existing, max_rows) or []
         existing.update(d.lower() for d in citing_dois)
     print(f'[OK] {md_file.name}: cited_by_date={fm["cited_by_date"]}  新增 {len(citing_dois)} 篇')
 
@@ -70,12 +72,9 @@ def run_cited_by(path: str, max_rows: int = 10) -> None:
     existing = build_doi_set(resolved if resolved.is_dir() else resolved.parent, include_refs=True)
     lock = threading.Lock()
 
-    with ThreadPoolExecutor() as ex:
-        futures = {ex.submit(_process_cited_file, f, cite_by_cache, doi_title_cache,
-                             existing, max_rows, lock): f
-                   for f in md_files}
-        for fut in as_completed(futures):
-            fut.result()
+    # 共享线程池（core.cache map_parallel）：复用线程免每轮重建，默认并发度与原 ThreadPoolExecutor() 一致
+    map_parallel(_process_cited_file, md_files, repeat(cite_by_cache),
+                 repeat(doi_title_cache), repeat(existing), repeat(max_rows), repeat(lock))
 
     save_cite_by_cache(cite_by_cache)
     save_doi_title_cache(doi_title_cache)

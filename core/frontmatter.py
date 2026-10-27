@@ -1,5 +1,4 @@
 import re
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -10,7 +9,7 @@ try:
 except ImportError:
     from yaml import SafeLoader as _YamlLoader, SafeDumper as _YamlDumper
 
-from core.cache import read_text_auto
+from core.cache import map_parallel, read_text_auto
 from core.doi import PATTERN_DOI, extract_doi_from_frontmatter, make_wikilink, process_doi
 
 PATTERN_FRONTMATTER = re.compile(r'^---\r?\n(.*?)\r?\n---', re.DOTALL | re.MULTILINE)
@@ -36,8 +35,7 @@ def parse_frontmatter_file(path: Path) -> Tuple[Optional[Dict], str]:
 
 def parse_frontmatter_batch(paths: List[Path], fm_only: bool = False):
     """并行解析多个文件的 frontmatter（保持输入顺序）；fm_only 时返回 [fm or None]。"""
-    with ThreadPoolExecutor() as ex:
-        parsed = list(ex.map(parse_frontmatter_file, paths))
+    parsed = map_parallel(parse_frontmatter_file, paths)
     if fm_only:
         return [fm for fm, _ in parsed]
     return parsed
@@ -91,14 +89,15 @@ def build_doi_set(md_dir: Path, include_refs: bool = False) -> set:
     """
     mds = list(md_dir.rglob('*.md'))
     dois = set()
-    for _, fm in zip(mds, parse_frontmatter_batch(mds, fm_only=True)):
+    for fm in parse_frontmatter_batch(mds, fm_only=True):
         if not fm:
             continue
         if main := extract_doi_from_frontmatter(fm):
             dois.add(main.lower())
-        if include_refs:
-            for key in ('reference', 'cited_by'):
-                for ref in fm.get(key, []):
-                    if isinstance(ref, str) and (m := PATTERN_DOI.search(ref)):
-                        dois.add(m.group(0).lower())
+        if not include_refs:
+            continue
+        for key in ('reference', 'cited_by'):
+            for ref in fm.get(key, []):
+                if isinstance(ref, str) and (m := PATTERN_DOI.search(ref)):
+                    dois.add(m.group(0).lower())
     return dois

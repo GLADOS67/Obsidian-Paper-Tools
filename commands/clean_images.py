@@ -1,11 +1,10 @@
 import os
 import re
 import shutil
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from config import DEFAULT_IMAGE_PATH, OBSIDIAN_ROOT
-from core.cache import read_text_safe
+from core.cache import map_parallel, read_text_safe
 
 PATTERN_IMG = re.compile(r'!\[[^\]]*\]\(([^)]+)\)')
 
@@ -15,30 +14,28 @@ def image_names(images_dir: Path) -> set:
     return {f.name for f in images_dir.iterdir() if f.is_file()}
 
 
+def _scan_one(md_path: Path) -> set:
+    text = read_text_safe(md_path)
+    if not text:
+        return set()
+    names = set()
+    for m in PATTERN_IMG.finditer(text):
+        url = m.group(1)
+        if url.startswith(('http://', 'https://')):
+            continue
+        normalized = url.replace('\\', '/')
+        if 'Vault/IMAGE' in normalized or '/images/' in normalized or normalized.startswith('images/'):
+            names.add(os.path.basename(normalized))
+    return names
+
+
 def scan_referenced_images(md_files, show_progress: bool = False) -> set:
     """并行扫描 .md 文件，返回被引用的本地图片文件名集合。"""
-    md_files = list(md_files)
     referenced = set()
-
-    def _scan_one(md_path: Path) -> set:
-        text = read_text_safe(md_path)
-        if not text:
-            return set()
-        names = set()
-        for m in PATTERN_IMG.finditer(text):
-            url = m.group(1)
-            if url.startswith(('http://', 'https://')):
-                continue
-            normalized = url.replace('\\', '/')
-            if 'Vault/IMAGE' in normalized or '/images/' in normalized or normalized.startswith('images/'):
-                names.add(os.path.basename(normalized))
-        return names
-
-    with ThreadPoolExecutor() as ex:
-        for i, names in enumerate(ex.map(_scan_one, md_files), 1):
-            referenced.update(names)
-            if show_progress and i % 200 == 0:
-                print(f'  进度: {i}/{len(md_files)}')
+    for i, names in enumerate(map_parallel(_scan_one, md_files), 1):
+        referenced.update(names)
+        if show_progress and i % 200 == 0:
+            print(f'  进度: {i}/{len(md_files)}')
     return referenced
 
 
@@ -53,8 +50,19 @@ def move_images_to(names, images_dir: Path, trash_dir: Path) -> int:
         except Exception:
             return 0
 
-    with ThreadPoolExecutor() as ex:
-        return sum(ex.map(_mv, names))
+    return sum(map_parallel(_mv, names))
+
+
+def prune_unreferenced_images(md_files, images_dir: Path, trash_dir: Path,
+                              show_progress: bool = False) -> tuple:
+    """扫描 MD 引用并将未引用图片移入 trash_dir（clean_images / trash 共用清理主链）。
+
+    返回 (referenced, unreferenced, moved)；无冗余时不建目录不移动，moved=0。
+    """
+    referenced = scan_referenced_images(md_files, show_progress=show_progress)
+    unreferenced = image_names(images_dir) - referenced
+    moved = move_images_to(unreferenced, images_dir, trash_dir) if unreferenced else 0
+    return referenced, unreferenced, moved
 
 
 def run_clean_images(path_vault=None, path_images=None, path_trash=None):
@@ -62,19 +70,15 @@ def run_clean_images(path_vault=None, path_images=None, path_trash=None):
     images_dir = Path(path_images or DEFAULT_IMAGE_PATH)
     trash_dir = Path(path_trash or (vault / 'TRASH' / 'Image'))
 
-    actual_files = image_names(images_dir)
-    print(f'IMAGE目录文件: {len(actual_files)}')
-
+    print(f'IMAGE目录文件: {len(image_names(images_dir))}')
     md_files = list(vault.rglob('*.md'))
     print(f'扫描MD文件: {len(md_files)}')
-    referenced = scan_referenced_images(md_files, show_progress=True)
+    referenced, unreferenced, moved = prune_unreferenced_images(
+        md_files, images_dir, trash_dir, show_progress=True)
     print(f'已引用图片: {len(referenced)}')
-
-    unreferenced = actual_files - referenced
     print(f'未引用图片: {len(unreferenced)}')
 
     if not unreferenced:
         print('无冗余图片')
         return
-    moved = move_images_to(unreferenced, images_dir, trash_dir)
     print(f'已移入TRASH: {moved}/{len(unreferenced)}')

@@ -258,17 +258,17 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     chi_reverse: Dict[str, Tuple[Path, str]] = {}
 
     chi_mds = sorted(chi_dir.rglob('*.md'))
-    chi_parsed = parse_frontmatter_batch(chi_mds)
-    for md, (fm, _) in zip(chi_mds, chi_parsed):
+    chi_parsed = parse_frontmatter_batch(chi_mds, fm_only=True)  # 仅需fm，免全量body驻留内存
+    for md, fm in zip(chi_mds, chi_parsed):
         if not fm:
             continue
         src = (fm.get('source') or '').strip().lower().rstrip('/')
         if src:
             by_source[src] = md
-        fr = first_ref_target(fm.get('reference', []))
-        if fr:
+        refs = fm.get('reference', [])
+        if fr := first_ref_target(refs):
             by_first_ref[fr] = md
-        chi_doi_sets[md] = extract_doi_set(fm.get('reference', []))
+        chi_doi_sets[md] = extract_doi_set(refs)
         title = fm.get('title', '')
         if isinstance(title, list):
             title = ' '.join(str(t) for t in title)

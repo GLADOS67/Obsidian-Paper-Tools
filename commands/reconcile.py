@@ -1,13 +1,12 @@
 import re
 import shutil
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 sys.stdout.reconfigure(encoding='utf-8')
 from core import iter_vault_dirs
-from core.cache import read_text_safe
+from core.cache import map_parallel, read_text_safe
 from core.frontmatter import parse_frontmatter_batch
 from core.refs import (
     classify_claude_stem,
@@ -103,13 +102,13 @@ def run_reconcile(vault_root: str = r'C:\Vault',
 
         if claude_dir.is_dir():
             claude_mds = sorted(claude_dir.glob('*.md'))
-            pa_mds = [md for md in claude_mds if classify_claude_stem(md.stem) == 'pa']
+            kinds = {md.stem: classify_claude_stem(md.stem) for md in claude_mds}  # 全循环分类一次，主循环免重复判定
+            pa_mds = [md for md in claude_mds if kinds[md.stem] == 'pa']
 
-            with ThreadPoolExecutor() as ex:  # IO并行解析H1，判定保持原顺序串行
-                pa_targets = dict(zip(pa_mds, ex.map(_resolve_pa, pa_mds)))
+            pa_targets = dict(zip(pa_mds, map_parallel(_resolve_pa, pa_mds)))  # IO并行解析H1，判定保持原顺序
             for md in claude_mds:
                 stem = md.stem
-                kind = classify_claude_stem(stem)
+                kind = kinds[stem]
                 if kind == 'zh':
                     continue
                 if kind == 'fe':
@@ -128,8 +127,8 @@ def run_reconcile(vault_root: str = r'C:\Vault',
 
         if chi_dir.is_dir():
             chi_mds = sorted(chi_dir.glob('*.md'))
-            chi_parsed = parse_frontmatter_batch(chi_mds)
-            for md, (fm, _) in zip(chi_mds, chi_parsed):
+            chi_parsed = parse_frontmatter_batch(chi_mds, fm_only=True)  # 仅需fm，免全量body驻留内存
+            for md, fm in zip(chi_mds, chi_parsed):
                 stem = md.stem
                 target = None
                 if fm:

@@ -4,7 +4,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from commands.clean_images import image_names, move_images_to, scan_referenced_images
+from commands.clean_images import image_names, prune_unreferenced_images
 from config import DEFAULT_IMAGE_PATH, DEFAULT_ZIP_PATH, OBSIDIAN_ROOT
 
 
@@ -36,12 +36,10 @@ def _restore_missing(images_dir: Path, referenced: set, zip_dir: Path) -> None:
 
 def run_trash(path: str) -> None:
     md_files = list(OBSIDIAN_ROOT.rglob('*.md'))
-    referenced = scan_referenced_images(md_files)
-    print(f'扫描MD: {len(md_files)}, 引用图片: {len(referenced)}')
     trash_dir = OBSIDIAN_ROOT / 'TRASH' / 'Image'
-    unreferenced = image_names(DEFAULT_IMAGE_PATH) - referenced
+    referenced, unreferenced, moved = prune_unreferenced_images(md_files, DEFAULT_IMAGE_PATH, trash_dir)
+    print(f'扫描MD: {len(md_files)}, 引用图片: {len(referenced)}')
     if unreferenced:
-        moved = move_images_to(unreferenced, DEFAULT_IMAGE_PATH, trash_dir)
         print(f'冗余图片移入 {trash_dir}: {moved}/{len(unreferenced)}')
     else:
         print('无冗余图片')

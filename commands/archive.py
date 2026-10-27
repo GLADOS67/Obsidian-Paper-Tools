@@ -26,10 +26,10 @@ def _resolve_note(src_dir: Path, page: str) -> Path:
 
 
 def _find_parent(path: Path, condition) -> Optional[Path]:
-    p = path
-    while not condition(p) and p != p.parent:
-        p = p.parent
-    return p if condition(p) else None
+    for p in (path, *path.parents):
+        if condition(p):
+            return p
+    return None
 
 
 def _copy_file(src: Path, dst: Path) -> str:

@@ -13,6 +13,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
+from itertools import repeat
 from typing import Dict, List, Optional, Tuple
 
 from core.cache import load_cache, save_cache
@@ -125,12 +126,11 @@ def fetch_references(doi: str, cache: dict = None) -> Tuple[List[Dict], Optional
     refs_missing = []
     for ref in msg.get('reference', []):
         if ref_doi := ref.get('DOI'):
-            refs_with_doi.append(_ref_entry(ref, ref_doi))
+            entry = _ref_entry(ref, ref_doi)
+            put_doi_title(cache, entry['doi'], entry['title'], TITLE_LOCK)
+            refs_with_doi.append(entry)
         elif ref.get('unstructured'):
             refs_missing.append(ref)
-
-    for r in refs_with_doi:
-        put_doi_title(cache, r['doi'], r['title'], TITLE_LOCK)
 
     if refs_missing:
         print(f'并行补全 {len(refs_missing)} 个缺失DOI...')
@@ -145,6 +145,36 @@ def fetch_references(doi: str, cache: dict = None) -> Tuple[List[Dict], Optional
 
     print(f'拉取到 {len(refs_with_doi)} 条参考文献')
     return refs_with_doi, year
+
+
+def _esummary_batch(base: str, batch: List[str], cutoff: datetime,
+                    doi_title_cache: dict) -> List[Tuple[datetime, str]]:
+    """单批 esummary 查询 → (pubdate, doi) 列表；标题缓存写入由 TITLE_LOCK 保护。"""
+    data = _api_get(f'{base}/esummary.fcgi',
+                    params={'db': 'pubmed', 'id': ','.join(batch), 'retmode': 'json'})
+    if data is None:
+        return []
+    results = data.get('result', {})
+    citing = []
+    for pmid_id in batch:
+        item = results.get(str(pmid_id))
+        if not item:
+            continue
+        m = _PUBDATE_RE.match(item.get('sortpubdate', ''))
+        if not m:
+            continue
+        try:
+            pubdate = datetime(*map(int, m.groups()))
+        except ValueError:
+            continue
+        if pubdate < cutoff:
+            continue
+        doi_val = next((aid.get('value') for aid in item.get('articleids', [])
+                        if aid.get('idtype') == 'doi'), None)
+        if doi_val:
+            put_doi_title(doi_title_cache, doi_val, item.get('title') or '', TITLE_LOCK)
+            citing.append((pubdate, process_doi(doi_val)[0]))
+    return citing
 
 
 def get_cited_by_pubmed(doi: str, cite_by_cache: dict = None,
@@ -187,33 +217,13 @@ def get_cited_by_pubmed(doi: str, cite_by_cache: dict = None,
         return _finalize([])
 
     cutoff = datetime.now() - timedelta(days=5 * 365)
+    batches = [links[i:i + 100] for i in range(0, len(links), 100)]
+    polite_sleep()  # 批次查询并行化：批间礼貌延迟合并为一次（结果与串行一致）
     citing = []
-    for i in range(0, len(links), 100):
-        batch = links[i:i + 100]
-        polite_sleep()
-        results = _api_get(f'{base}/esummary.fcgi',
-                           params={'db': 'pubmed', 'id': ','.join(batch), 'retmode': 'json'})
-        if results is None:
-            continue
-        results = results.get('result', {})
-        for pmid_id in batch:
-            item = results.get(str(pmid_id))
-            if not item:
-                continue
-            m = _PUBDATE_RE.match(item.get('sortpubdate', ''))
-            if not m:
-                continue
-            try:
-                pubdate = datetime(*map(int, m.groups()))
-            except ValueError:
-                continue
-            if pubdate < cutoff:
-                continue
-            doi_val = next((aid.get('value') for aid in item.get('articleids', [])
-                            if aid.get('idtype') == 'doi'), None)
-            if doi_val:
-                put_doi_title(doi_title_cache, doi_val, item.get('title') or '', TITLE_LOCK)
-                citing.append((pubdate, process_doi(doi_val)[0]))
+    with ThreadPoolExecutor(max_workers=min(CPU_CORES, len(batches))) as ex:
+        for part in ex.map(_esummary_batch, repeat(base), batches,
+                           repeat(cutoff), repeat(doi_title_cache)):
+            citing.extend(part)
     citing.sort(key=lambda x: x[0], reverse=True)
     return _finalize([d for _, d in citing])
 
