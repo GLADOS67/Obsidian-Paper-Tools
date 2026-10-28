@@ -15,30 +15,38 @@ from core.doi import PATTERN_DOI, extract_doi_from_frontmatter, make_wikilink, p
 PATTERN_FRONTMATTER = re.compile(r'^---\r?\n(.*?)\r?\n---', re.DOTALL | re.MULTILINE)
 
 
-def parse_frontmatter_str(content: str) -> Tuple[Dict, str]:
+def parse_frontmatter_str(content: str, fm_only: bool = False) -> Tuple[Dict, str]:
     fm_match = PATTERN_FRONTMATTER.search(content)
     if not fm_match:
-        return {}, content
+        return {}, content if not fm_only else None
     try:
         loaded = yaml.load(fm_match.group(1), Loader=_YamlLoader)
         fm = loaded if isinstance(loaded, dict) else {}
     except Exception:
         fm = {}
+    if fm_only:
+        return fm, None
     return fm, content[fm_match.end():].lstrip('\n\r')
 
 
-def parse_frontmatter_file(path: Path) -> Tuple[Optional[Dict], str]:
+def parse_frontmatter_file(path: Path, fm_only: bool = False):
     raw = read_text_auto(path)
+    if fm_only:
+        fm, _ = parse_frontmatter_str(raw, fm_only=True)
+        return fm or None
     fm, rest = parse_frontmatter_str(raw)
     return fm or None, rest
 
 
 def parse_frontmatter_batch(paths: List[Path], fm_only: bool = False):
-    """并行解析多个文件的 frontmatter（保持输入顺序）；fm_only 时返回 [fm or None]。"""
-    parsed = map_parallel(parse_frontmatter_file, paths)
+    """并行解析多个文件的 frontmatter（保持输入顺序）；fm_only 时返回 [fm or None]。
+
+    fm_only 走免 body 切片路径（parse_frontmatter_str 的 fm_only=True），
+    避免逐文件复制整篇正文后立即丢弃（match/reconcile/graph 全量扫描省内存）。
+    """
     if fm_only:
-        return [fm for fm, _ in parsed]
-    return parsed
+        return map_parallel(lambda p: parse_frontmatter_file(p, fm_only=True), paths)
+    return map_parallel(parse_frontmatter_file, paths)
 
 
 def dump_frontmatter(fm: Dict, body: str) -> str:
@@ -49,6 +57,18 @@ def dump_frontmatter(fm: Dict, body: str) -> str:
     # 换行归一：Windows write_text 会把 \n→\r\n，若 body 残留 \r\n 会变 \r\r\n 损坏
     body = body.replace('\r\n', '\n').replace('\r', '\n')
     return f'---\n{yaml_str}\n---\n{body}'
+
+
+def title_or(fm: Dict, fallback: str = '') -> str:
+    """frontmatter title → 字符串（列表拼接，不校验有效性）；空则返回 fallback。
+
+    与 `fm.get('title') or fallback` 语义完全一致，仅补 list 拼接防崩溃
+    （fm_title 会额外去空白/校验 [[]]，语义不同，勿替换调用点）。
+    """
+    raw = fm.get('title')
+    if isinstance(raw, list):
+        raw = ' '.join(str(t) for t in raw)
+    return raw if raw else fallback
 
 
 def fm_title(fm: Dict, fallback: str = '') -> str:

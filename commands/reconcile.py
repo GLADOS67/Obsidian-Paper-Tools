@@ -28,8 +28,8 @@ def build_clippings_index(vault_root: Path) -> Tuple[Dict[str, str], Set[str], S
         if not clip_dir.is_dir():
             continue
         mds = sorted(clip_dir.rglob('*.md'))
-        parsed = parse_frontmatter_batch(mds)
-        for md, (fm, _) in zip(mds, parsed):
+        parsed = parse_frontmatter_batch(mds, fm_only=True)  # 仅需fm，免全量body驻留内存
+        for md, fm in zip(mds, parsed):
             stem = md.stem
             for variant in norm_stems(stem):
                 clip_to_vault.setdefault(variant, vault_dir.name)

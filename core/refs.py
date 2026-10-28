@@ -77,7 +77,6 @@ def norm_stems(stem: str) -> set:
             if prefix:
                 variants.update((prefix, prefix.lower()))
     variants |= {v.rstrip('.') for v in list(variants) if v.endswith('.')}
-    variants |= {v.lower() for v in variants if not v.islower()}
     return variants
 
 

@@ -1,20 +1,18 @@
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from core.title_cache import (load_doi_title_cache, put_doi_title,
                               save_doi_title_cache)
-from core.web_services import fetch_references, get_doi_from_citation
+from core.web_services import fetch_references, get_doi_from_citation, lookup_dois_parallel
 from core.doi import (PATTERN_DOI, extract_doi_from_frontmatter,
                        get_main_doi, process_doi, repair_doi_text)
-from core.frontmatter import dump_frontmatter, fm_title, parse_frontmatter_str
+from core.frontmatter import dump_frontmatter, fm_title, parse_frontmatter_str, title_or
 from core.obsidian_path import resolve_input_path, SM_QUICK
 from core.pdf_extractor import extract_first_doi_from_pdf
 from core.refs import (build_existing_dois, new_doi_wikilinks,
                        process_existing_references)
-from config import CPU_CORES
 
 RE_REF_ENTRY = re.compile(r'^\s*(?:\[(\d+)\]|(\d+)\.)\s+(.*)$', re.MULTILINE)
 
@@ -109,7 +107,7 @@ def process_file(file_path: Path, cache: dict) -> None:
     if not main_doi:
         print('未提取到 DOI，尝试标题搜索...')
         md_title = fm_title(fm_data, stem)
-        main_doi = _resolve_doi_by_title(fm_data.get('title', stem), md_title, cache)
+        main_doi = _resolve_doi_by_title(title_or(fm_data, stem), md_title, cache)
     if not main_doi:
         if suffix == '.md':
             process_local_references_in_md(file_path, cache=cache)
@@ -142,15 +140,11 @@ def process_local_references_in_md(md_path: Path, override_main_doi: Optional[st
     ref_entries = RE_REF_ENTRY.findall(content[ref_start:])
     print(f'找到 {len(ref_entries)} 条本地参考文献，处理中...')
 
-    # 无DOI条目并行查Crossref（复用 web_services.fetch_references 的并行补全模式），输出仍按原顺序
-    found = {}
-    with ThreadPoolExecutor(max_workers=min(CPU_CORES * 2, 4)) as ex:
-        futures = {ex.submit(get_doi_from_citation, text, cache): i
-                   for i, (_, _, text) in enumerate(ref_entries)
-                   if not PATTERN_DOI.search(repair_doi_text(text))}
-        for fut in as_completed(futures):
-            if result := fut.result():
-                found[futures[fut]] = result[0]
+    # 无DOI条目并行查Crossref（复用 lookup_dois_parallel：共享线程池 + map 保序）
+    need = [(i, text) for i, (_, _, text) in enumerate(ref_entries)
+            if not PATTERN_DOI.search(repair_doi_text(text))]
+    found = {need[k][0]: r[0] for k, r in
+             lookup_dois_parallel([t for _, t in need], cache).items()}
 
     references = []
     for i, (num1, num2, text) in enumerate(ref_entries):
@@ -213,8 +207,8 @@ def _handle_takeover_mode(file_path: Path, cache: dict) -> None:
         return
     print(f'￥ 接管模式: {file_path}')
     stem = file_path.stem
-    title = fm_data.get('title', stem) if suffix == '.md' else stem
     md_title = fm_title(fm_data, stem)
+    title = title_or(fm_data, stem) if suffix == '.md' else stem
     print(f'使用标题搜索: {title}')
     main_doi = _resolve_doi_by_title(title, md_title, cache)
     if not main_doi:

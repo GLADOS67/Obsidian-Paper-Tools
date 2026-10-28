@@ -3,14 +3,14 @@ from itertools import repeat
 from pathlib import Path
 from typing import Optional
 
-from core.cache import map_parallel, read_text_auto
+from core.cache import map_parallel
 from core.title_cache import load_doi_title_cache, save_doi_title_cache
 from core.web_services import (load_cite_by_cache, refresh_cited_by,
                                save_cite_by_cache)
 from core.doi import PATTERN_DOI, get_main_doi, process_doi
 from core.frontmatter import (
     build_doi_set, cited_by_fresh, dump_frontmatter,
-    parse_frontmatter_str,
+    parse_frontmatter_file,
 )
 from core.obsidian_path import resolve_input_path
 from core.refs import wikilink_doi
@@ -31,12 +31,10 @@ def _extract_main_doi(fm: dict, body: str) -> Optional[str]:
 def _process_cited_file(md_file: Path, cite_by_cache: dict, doi_title_cache: dict,
                        existing: set, max_rows: int, lock: threading.Lock) -> None:
     try:
-        content = read_text_auto(md_file)
+        fm, body = parse_frontmatter_file(md_file)  # read_text_auto + 解析（跨模块公共实现）
     except Exception as e:
         print(f'[ERR] 读取 {md_file.name}: {e}')
         return
-
-    fm, body = parse_frontmatter_str(content)
     main_doi = _extract_main_doi(fm, body)
     if not main_doi:
         print(f'[SKIP] {md_file.name}: 未提取到主DOI')

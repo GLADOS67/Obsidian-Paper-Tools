@@ -3,8 +3,8 @@ import shutil
 import time
 import uuid
 import zipfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from itertools import repeat
 from pathlib import Path
 
 from core.cache import map_parallel
@@ -17,7 +17,7 @@ from core.web_services import (fetch_references, get_doi_from_citation,
 from core.doi import (find_plausible_dois, get_main_doi,
                        normalize_unicode_dashes, process_doi, repair_doi_text)
 from core.frontmatter import (build_doi_set, dump_frontmatter,
-                               parse_frontmatter_str)
+                               parse_frontmatter_str, title_or)
 from core.http import get_session
 from core.markdown_utils import clean_markdown_body
 from core.refs import (build_existing_dois, canonicalize_stem, new_doi_wikilinks,
@@ -28,7 +28,7 @@ from core.mineru import (MINERU_API_BASE, URL_PATTERN, IMAGES_PATH_PATTERN,
                          find_extracted_files, first_main_doi_from_json,
                          poll_batch_completion, replace_urls, upload_one)
 from core.pdf_extractor import convert_pdf_to_md, extract_dois_from_pdf
-from config import (CPU_CORES, DEFAULT_IMAGE_PATH, DEFAULT_MD_PATH, DEFAULT_PDF_PATH,
+from config import (DEFAULT_IMAGE_PATH, DEFAULT_MD_PATH, DEFAULT_PDF_PATH,
                     DEFAULT_ZIP_PATH, MINERU_TOKEN, OBSIDIAN_ROOT)
 
 _http = get_session()
@@ -87,7 +87,7 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, doi_title_c
     if urls:
         content = replace_urls(content, urls)
     fm, rest = parse_frontmatter_str(content)
-    title = fm.get('title') or md_dst.stem
+    title = title_or(fm, md_dst.stem)
     main_doi = source = None
     md_cand = None
     json_cand = None
@@ -207,12 +207,10 @@ def _run_local_batch(pdf_files, path_md0, enable_api_refs,
             _mark_pdf_done(pdf_path)
         return md_dst.name
 
-    with ThreadPoolExecutor(max_workers=min(CPU_CORES, len(pdf_files))) as ex:
-        futures = {ex.submit(_process_one, pf, i): pf for i, pf in enumerate(pdf_files, 1)}
-        for fut in as_completed(futures):
-            name = fut.result()
-            if name:
-                print(f'  完成 -> {name}')
+    # 共享线程池（core.cache map_parallel）：复用线程免每轮重建，结果按输入顺序
+    for name in map_parallel(_process_one, pdf_files, range(1, len(pdf_files) + 1)):
+        if name:
+            print(f'  完成 -> {name}')
 
 
 def _process_downloaded_one(idx, f_info, path_zip, path_md0, name_to_path, path_pdf,
@@ -238,12 +236,12 @@ def _process_downloaded_one(idx, f_info, path_zip, path_md0, name_to_path, path_
         if img_src:
             for img_file in img_src.glob('*'):
                 dst_img = images_output / img_file.name
-                if not dst_img.exists() and try_copy(img_file, dst_img):
-                    continue  # 硬链接优先（免整图拷贝），目标已存在或失败回退 copy2（保留覆盖语义）
-                try:
-                    shutil.copy2(img_file, dst_img)
-                except Exception:
-                    pass
+                if not try_copy(img_file, dst_img):
+                    # 硬链接失败或目标已存在 → copy2 覆盖（保留原覆盖语义）
+                    try:
+                        shutil.copy2(img_file, dst_img)
+                    except Exception:
+                        pass
         if md_dst:
             pdf_file_path = name_to_path.get(file_name, path_pdf / file_name)
             if _process_md_content(md_dst, json_src, pdf_file_path, enable_api_refs,
@@ -274,21 +272,15 @@ def download_and_process_batch(batch_id, path_zip, path_md0, token, path_pdf,
          f_info['file_name'], idx)
         for idx, f_info in enumerate(files, 1)
     ]
-    with ThreadPoolExecutor(max_workers=min(CPU_CORES * 2, 5)) as executor:
-        futures = {executor.submit(download_zip, *task): task[3] for task in download_tasks}
-        for future in as_completed(futures):
-            future.result()
+    map_parallel(download_zip, *zip(*download_tasks))
 
-    with ThreadPoolExecutor(max_workers=min(CPU_CORES * 2, 4)) as ex:
-        futures = [
-            ex.submit(_process_downloaded_one, idx, f_info, path_zip, path_md0,
-                      name_to_path, path_pdf, images_output, enable_api_refs,
-                      doi_title_cache, cite_by_cache, enable_cited_by, cited_by_max,
-                      clippings_doi_set, ref_max_age)
-            for idx, f_info in enumerate(files, 1)
-        ]
-        for fut in futures:
-            fut.result()
+    map_parallel(_process_downloaded_one,
+                 range(1, len(files) + 1), files,
+                 repeat(path_zip), repeat(path_md0), repeat(name_to_path),
+                 repeat(path_pdf), repeat(images_output), repeat(enable_api_refs),
+                 repeat(doi_title_cache), repeat(cite_by_cache),
+                 repeat(enable_cited_by), repeat(cited_by_max),
+                 repeat(clippings_doi_set), repeat(ref_max_age))
     print(f'批次 {batch_id} 处理完成！Markdown: {path_md0}，图片: {images_output}')
 
 
@@ -389,8 +381,8 @@ def run_pdf2md(path_pdf: str = None, path_zip: str = None, path_md0: str = None,
         batch_ids.append(bid)
         print(f'批次 {batch_idx} 申请链接成功 | batch_id：{bid}')
 
-        with ThreadPoolExecutor(max_workers=min(CPU_CORES * 2, 5)) as ex:
-            uploaded_files = [f for f in ex.map(upload_one, batch_files, url_result['upload_urls']) if f]
+        uploaded_files = [f for f in map_parallel(upload_one, batch_files,
+                                                  url_result['upload_urls']) if f]
         batch_file_map[bid] = uploaded_files
         total_success += len(uploaded_files)
         print(f'批次 {batch_idx} 上传完成 | 成功：{len(uploaded_files)}/{len(batch_files)}')

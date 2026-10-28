@@ -10,20 +10,19 @@
 
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from itertools import repeat
 from typing import Dict, List, Optional, Tuple
 
-from core.cache import load_cache, save_cache
+from core.cache import load_cache, map_parallel, save_cache
 from core.doi import norm_title, process_doi
 from core.frontmatter import apply_cited_by, cited_by_fresh
 from core.http import get_session, polite_sleep
 from core.similarity import ratio_gate_passes
 from core.title_cache import TITLE_LOCK, lookup_doi_by_title, put_doi_title
 
-from config import CPU_CORES, CITE_BY_CACHE, CROSSREF_MAILTO
+from config import CITE_BY_CACHE, CROSSREF_MAILTO
 CROSSREF_API_BASE = 'https://api.crossref.org/works'
 
 _CITE_LOCK = threading.Lock()
@@ -101,6 +100,17 @@ def get_doi_from_citation(citation_text: str, cache: dict = None,
     return doi, title, '联网'
 
 
+def lookup_dois_parallel(texts: List[str], cache: dict = None,
+                         lock: threading.Lock = None) -> Dict[int, Tuple[str, str, str]]:
+    """并行 标题→DOI 补全（共享线程池 map 保序）；返回 {原文索引: (doi,title,source)}，未命中项缺失。
+
+    公共实现（fetch_references / crossref 原各有一份自建 ThreadPoolExecutor 的补全循环，
+    复用 core.cache 共享池免每轮重建线程）。
+    """
+    return {i: r for i, r in enumerate(map_parallel(
+        lambda t: get_doi_from_citation(t, cache, lock), texts)) if r}
+
+
 def _ref_entry(ref: dict, doi: str) -> Dict:
     return {'text': ref.get('unstructured', ''),
             'doi': process_doi(doi)[0],
@@ -137,14 +147,11 @@ def fetch_references(doi: str, cache: dict = None) -> Tuple[List[Dict], Optional
 
     if refs_missing:
         print(f'并行补全 {len(refs_missing)} 个缺失DOI...')
-        with ThreadPoolExecutor(max_workers=min(CPU_CORES * 2, 4)) as ex:
-            futures = {ex.submit(get_doi_from_citation, r['unstructured'], cache, TITLE_LOCK): r
-                       for r in refs_missing}
-            for fut in as_completed(futures):
-                ref = futures[fut]
-                if result := fut.result():
-                    print(f'补全成功[{result[2]}]: {result[0]}')
-                    refs_with_doi.append(_ref_entry(ref, result[0]))
+        found = lookup_dois_parallel([r['unstructured'] for r in refs_missing], cache, TITLE_LOCK)
+        for i, ref in enumerate(refs_missing):
+            if result := found.get(i):
+                print(f'补全成功[{result[2]}]: {result[0]}')
+                refs_with_doi.append(_ref_entry(ref, result[0]))
 
     print(f'拉取到 {len(refs_with_doi)} 条参考文献')
     return refs_with_doi, year
@@ -223,10 +230,9 @@ def get_cited_by_pubmed(doi: str, cite_by_cache: dict = None,
     batches = [links[i:i + 100] for i in range(0, len(links), 100)]
     polite_sleep()  # 批次查询并行化：批间礼貌延迟合并为一次（结果与串行一致）
     citing = []
-    with ThreadPoolExecutor(max_workers=min(CPU_CORES, len(batches))) as ex:
-        for part in ex.map(_esummary_batch, repeat(base), batches,
-                           repeat(cutoff), repeat(doi_title_cache)):
-            citing.extend(part)
+    for part in map_parallel(_esummary_batch, repeat(base), batches,
+                             repeat(cutoff), repeat(doi_title_cache)):
+        citing.extend(part)
     citing.sort(key=lambda x: x[0], reverse=True)
     return _finalize([d for _, d in citing])
 

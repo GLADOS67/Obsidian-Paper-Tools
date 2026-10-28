@@ -4,6 +4,7 @@
 （put_doi_title / lookup_doi_by_title 的 lock 参数为 None 时用内部锁）。
 """
 
+import re
 import threading
 from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Tuple
@@ -73,9 +74,10 @@ def put_doi_title(cache: dict, doi: str, title: str, lock: threading.Lock = None
     if not is_plausible_doi(doi):
         print(f'⚠️ 拒绝写入可疑DOI: {doi} {title[:40]}')
         return
-    title = (title or '').strip()
+    # 剥尾部 [ ] 段（Crossref 常见"原题 [译题]"；德文亦可能作引号），防污染索引键
+    title = re.sub(r'\s*\[[^\]]*\]\s*$', '', (title or '')).strip()
     # 标题含 wikilink 包裹（[[...]]）是历史遗留格式，非真实标题，拒绝写入缓存
-    if '[' in title or ']' in title:
+    if '[[' in title or ']]' in title:
         print(f'⚠️ 拒绝写入wikilink格式标题: {doi} {title[:40]}')
         return
     with lock or TITLE_LOCK:

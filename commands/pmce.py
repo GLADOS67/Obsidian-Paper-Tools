@@ -416,8 +416,7 @@ def _refs_md(root):
     return lines
 
 
-def _compose_md(meta, xml_text):
-    root = ET.fromstring(xml_text)
+def _compose_md(meta, root):
     front = _first(root, 'front')
     body = _first(root, 'body')
     floats = _first(root, 'floats-group')
@@ -549,15 +548,16 @@ def run_pmce(input_arg, path, no_graph=False, dry_run=False):
             non_oa.append(meta)
             continue
         try:
-            root = ET.fromstring(xml)
-        except Exception:
-            root = None
-        if root is not None:
-            hrefs = _collect_fig_hrefs(root)
-            if hrefs:
-                _prefetch_figure_urls(meta['pmcid'], hrefs)
+            root = ET.fromstring(xml)  # 单次解析：fig 预取与 _compose_md 复用同一 root，免二次 XML 解码
+        except Exception as e:
+            print(f'解析失败 {meta.get("id")}: {e}')
+            polite_sleep(2.0, 4.0)
+            continue
+        hrefs = _collect_fig_hrefs(root)
+        if hrefs:
+            _prefetch_figure_urls(meta['pmcid'], hrefs)
         try:
-            target.write_text(_compose_md(meta, xml), encoding='utf-8')
+            target.write_text(_compose_md(meta, root), encoding='utf-8')
             written.append((meta, target))
             print(f'[{i}/{len(jobs)}] {target.name}')
         except Exception as e:

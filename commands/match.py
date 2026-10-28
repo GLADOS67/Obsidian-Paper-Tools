@@ -81,6 +81,45 @@ def _index_pa_note(md: Path, text: str, pa_index: Dict[str, Path],
     return None
 
 
+def _index_claude_mds(mds, texts, pa_index: Dict[str, Path],
+                      pa_reverse: Dict[str, Tuple[Path, str]],
+                      pa_text: Dict[str, str], pa_alias: Dict[str, str],
+                      fe_index: Dict[str, Path],
+                      with_alias: bool = True,
+                      skip_existing: bool = False) -> Tuple[Dict[str, Path], Dict[str, Path]]:
+    """扫描 Claude 目录笔记（vault 主目录与 TRASH 扫描共用同一套 PA/FE 分类索引逻辑）。
+
+    skip_existing=True（TRASH）：仅登记未收录的 stem；
+    with_alias=False（TRASH）：不做中文行回退别名（保持原 TRASH 语义）。
+    返回 (新增FE映射, 新增PA映射)。
+    """
+    new_fe: Dict[str, Path] = {}
+    new_pa: Dict[str, Path] = {}
+    for md, text in zip(mds, texts):
+        stem = md.stem
+        kind = classify_claude_stem(stem)
+        if kind == 'zh':
+            continue
+        if kind == 'fe':
+            key = stem[:-8]
+            if skip_existing and key in fe_index:
+                continue
+            fe_index[key] = md
+            new_fe[key] = md
+            continue
+        if skip_existing and stem in pa_index:
+            continue
+        ch = _index_pa_note(md, text, pa_index, pa_reverse, pa_text)
+        if ch is None and with_alias:
+            ch = next((s for line in text.split('\n')
+                       if (s := line.lstrip('#').strip())
+                       and any('一' <= c <= '鿿' for c in s)), None)
+        if ch and with_alias:
+            pa_alias[stem] = ch
+        new_pa[stem] = md
+    return new_fe, new_pa
+
+
 def _find_pa(clip_stem: str, pa_index: Dict[str, Path],
               pa_reverse: Dict[str, Tuple[Path, str]], pa_text: Dict[str, str],
               pa_alias: Dict[str, str], doi: Optional[str],
@@ -293,22 +332,8 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     claude_dir = base / 'Claude'
     if claude_dir.is_dir():
         claude_mds = sorted(claude_dir.rglob('*.md'))
-        claude_texts = read_texts_batch(claude_mds)  # IO并行读取正文
-        for md, text in zip(claude_mds, claude_texts):
-            stem = md.stem
-            kind = classify_claude_stem(stem)
-            if kind == 'zh':
-                continue
-            if kind == 'fe':
-                fe_index[stem[:-8]] = md
-                continue
-            ch = _index_pa_note(md, text, pa_index, pa_reverse, pa_text)
-            if ch is None:
-                ch = next((s for line in text.split('\n')
-                           if (s := line.lstrip('#').strip())
-                           and any('一' <= c <= '鿿' for c in s)), None)
-            if ch:
-                pa_alias[stem] = ch
+        _index_claude_mds(claude_mds, read_texts_batch(claude_mds),
+                          pa_index, pa_reverse, pa_text, pa_alias, fe_index)
 
     for fe_stem, fe_path in fe_index.items():
         space_stem = fe_stem.replace('_', ' ')
@@ -325,20 +350,9 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     trash_fe_source: Dict[str, Path] = {}
     if reconcile_claude and TRASH_CLAUDE.is_dir():
         trash_files = sorted(TRASH_CLAUDE.rglob('*.md'))
-        trash_texts = read_texts_batch(trash_files)
-        for md, text in zip(trash_files, trash_texts):
-            stem = md.stem
-            kind = classify_claude_stem(stem)
-            if kind == 'zh':
-                continue
-            if kind == 'fe':
-                if stem[:-8] not in fe_index:
-                    fe_index[stem[:-8]] = md
-                    trash_fe_source[stem[:-8]] = md
-                continue
-            if stem not in pa_index:
-                _index_pa_note(md, text, pa_index, pa_reverse, pa_text)
-                trash_pa_source[stem] = md
+        trash_fe_source, trash_pa_source = _index_claude_mds(
+            trash_files, read_texts_batch(trash_files), pa_index, pa_reverse,
+            pa_text, pa_alias, fe_index, with_alias=False, skip_existing=True)
         print(f'TRASH: {len(trash_pa_source)} PA, {len(trash_fe_source)} FE scanned\n')
 
     stats = {

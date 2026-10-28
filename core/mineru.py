@@ -12,6 +12,7 @@ import os
 import re
 import time
 import zipfile
+from functools import lru_cache
 from itertools import chain
 from pathlib import Path
 
@@ -29,6 +30,14 @@ URL_PATTERN = re.compile(
     re.IGNORECASE
 )
 IMAGES_PATH_PATTERN = re.compile(r'\]\(images/')
+
+
+@lru_cache(maxsize=256)
+def _parse_content_json(json_key: str):
+    """按路径缓存 JSON 解析结果：pdf2md 对同一 content_list_v2.json 的
+    extract_json_data + first_main_doi_from_json 双调用免二次读盘/解码（大文件可达数 MB）。
+    解析失败不缓存（调用方各自捕获并打印，与原始错误语义一致）。"""
+    return json.loads(Path(json_key).read_text(encoding='utf-8'))
 
 
 def extract_text(obj):
@@ -73,7 +82,7 @@ def extract_json_data(json_src):
     if not (json_src and json_src.exists()):
         return set(), []
     try:
-        content_data = json.loads(json_src.read_text(encoding='utf-8'))
+        content_data = _parse_content_json(str(json_src))
     except Exception as e:
         print(f'读取/解析JSON失败 {json_src}: {e}')
         return set(), []
@@ -102,7 +111,7 @@ def first_main_doi_from_json(json_src):
     if not (json_src and json_src.exists()):
         return None
     try:
-        content_data = json.loads(json_src.read_text(encoding='utf-8'))
+        content_data = _parse_content_json(str(json_src))
     except Exception as e:
         print(f'读取/解析JSON失败 {json_src}: {e}')
         return None
