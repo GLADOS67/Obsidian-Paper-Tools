@@ -13,7 +13,7 @@ from core.title_cache import (load_doi_title_cache, lookup_doi_by_title,
                               verify_doi_title)
 from core.web_services import (fetch_references, get_doi_from_citation,
                                load_cite_by_cache, refresh_cited_by,
-                               save_cite_by_cache)
+                               save_cite_by_cache, verify_work_title)
 from core.doi import (find_plausible_dois, get_main_doi,
                        normalize_unicode_dashes, process_doi, repair_doi_text)
 from core.frontmatter import (build_doi_set, dump_frontmatter,
@@ -102,16 +102,23 @@ def _process_md_content(md_dst, json_src, pdf_path, enable_api_refs, doi_title_c
             if cand and verify_doi_title(cand, title, doi_title_cache):
                 main_doi, source = cand, '缓存验证'
                 break
+    if main_doi is None and enable_api_refs:
+        result = get_doi_from_citation(title, doi_title_cache)
+        main_doi = process_doi(result[0])[0] if result else None
+        source = result[2] if result else '未匹配'
+    if main_doi is None:
+        # 标题搜索（启用时）失败后的最后在线兜底：OpenAlex 免费 singleton 确认候选（0成本/次）
+        for cand in (md_cand, json_cand, pdf_first_doi):
+            if cand and verify_work_title(cand, title):
+                main_doi, source = cand, 'OpenAlex'
+                break
+    # 全部在线手段（缓存/缓存验证/标题搜索/OpenAlex）失败后的最后保底：无验证接受本地候选
     if main_doi is None and md_cand:
         main_doi, source = md_cand, 'MD'
     if main_doi is None and json_cand:
         main_doi, source = json_cand, 'JSON'
     if main_doi is None and pdf_first_doi:
         main_doi, source = pdf_first_doi, 'PDF'
-    if main_doi is None and enable_api_refs:
-        result = get_doi_from_citation(title, doi_title_cache)
-        main_doi = process_doi(result[0])[0] if result else None
-        source = result[2] if result else '未匹配'
     if main_doi:
         main_doi = process_doi(main_doi)[0]
         print(f'论文DOI来源: {source} | {main_doi}')

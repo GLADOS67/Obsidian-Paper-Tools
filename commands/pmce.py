@@ -26,6 +26,7 @@ from core.frontmatter import dump_frontmatter, parse_frontmatter_str
 from core.http import get_session, polite_sleep
 from core.refs import pin_main_doi, split_wikilink
 from core.similarity import BUCKET_WIDTH, bucket_candidates, ratio_gate_passes
+from core.web_services import get_work_by_doi
 from commands.markdown_graph import run_markdown_graph
 
 EUPMC_BASE = 'https://www.ebi.ac.uk/europepmc/webservices/rest'
@@ -128,14 +129,42 @@ def _query_clause(kind, val):
     return f'TITLE:"{val}"'
 
 
+def _fetch_openalex_fallback(chunk):
+    """EuropePMC 失败时：仅 DOI 类条目用 OpenAlex 免费 singleton 补元数据（0成本/次）。
+
+    归一化为 EuropePMC 同构 dict（_match_one/_build_result_index 直接复用）；
+    PMID/标题条目需付费 filter（ids.pmid / title.search），不兜底。
+    """
+    out = []
+    for kind, val in chunk:
+        if kind != 'doi':
+            continue
+        work = get_work_by_doi(val)
+        if not work:
+            continue
+        ids = work.get('ids') or {}
+        oa = (work.get('open_access') or {}).get('is_oa', False)
+        pmid = str(ids.get('pmid') or '')
+        out.append({
+            'id': pmid.rsplit('/', 1)[-1] or work.get('id') or '',
+            'doi': (work.get('doi') or '').replace('https://doi.org/', ''),
+            'title': work.get('title') or '',
+            'pmcid': ids.get('pmcid') or '',
+            'isOpenAccess': 'Y' if oa else 'N',
+            'firstPublicationDate': work.get('publication_date') or '',
+            'authorString': '',
+        })
+    return out
+
+
 def _fetch_chunk(chunk, idx):
     resp = _eupmc_get(f'{EUPMC_BASE}/search', {
         'query': ' OR '.join(_query_clause(k, v) for k, v in chunk),
         'format': 'json', 'resultType': 'core', 'pageSize': 100,
     })
     if resp is None:
-        print(f'元数据批次 {idx} 请求失败')
-        return []
+        print(f'元数据批次 {idx} 请求失败，OpenAlex DOI兜底...')
+        return _fetch_openalex_fallback(chunk)
     return resp.json().get('resultList', {}).get('result', [])
 
 

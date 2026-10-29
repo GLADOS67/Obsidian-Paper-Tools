@@ -1,8 +1,9 @@
-"""远程网络服务：Crossref works API + PubMed E-utilities（施引查询）。
+"""远程网络服务：Crossref works API + PubMed E-utilities（施引查询）+ OpenAlex DOI 元数据。
 
 线上服务层：
   - Crossref：标题→DOI（get_doi_from_citation）、DOI→参考文献（fetch_references）
   - PubMed：DOI→近5年施引（get_cited_by_pubmed）、frontmatter 新鲜度+写回（refresh_cited_by）
+  - OpenAlex：DOI→work 元数据（get_work_by_doi，免费 singleton，0成本/次；verify_work_title 在线验证）
   - Cite_By_cache 读写（施引缓存，独立于 title_cache）
 标题缓存（Doi_Title_cache）在 core.title_cache，此处写标题缓存统一传 TITLE_LOCK；
 施引缓存由本模块 _CITE_LOCK 保护；两锁无嵌套获取，并发语义与原单一锁等价。
@@ -10,6 +11,7 @@
 
 import re
 import threading
+import time
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from itertools import repeat
@@ -24,6 +26,8 @@ from core.title_cache import TITLE_LOCK, lookup_doi_by_title, put_doi_title
 
 from config import CITE_BY_CACHE, CROSSREF_MAILTO
 CROSSREF_API_BASE = 'https://api.crossref.org/works'
+OPENALEX_API_BASE = 'https://api.openalex.org'
+_OPENALEX_SIM = 0.9   # OpenAlex 在线验证标题最低相似度（与 title_cache verify_doi_title 门控一致）
 
 _CITE_LOCK = threading.Lock()
 _CROSSREF_SIM = 0.5   # Crossref 返回标题 vs 引用文本的最低相似度（与 pmce _TITLE_SIM 一致）
@@ -48,6 +52,50 @@ def _api_get(url: str, params: dict = None, timeout: int = 10) -> Optional[dict]
         return resp.json()
     except Exception:
         return None
+
+
+def _openalex_get(path: str, params: dict = None, retries: int = 3) -> Optional[dict]:
+    """OpenAlex singleton GET（0成本/次）：429/5xx 指数退避，失败返回 None，永不 raise。"""
+    for attempt in range(retries):
+        try:
+            resp = _http.get(f'{OPENALEX_API_BASE}{path}', params=params, timeout=15)
+            if resp.status_code == 200:
+                return resp.json()
+            if resp.status_code not in (429, 500, 502, 503, 504):
+                return None
+        except Exception:
+            pass
+        time.sleep(2 ** attempt)
+    return None
+
+
+def get_work_by_doi(doi: str) -> Optional[dict]:
+    """OpenAlex 免费 singleton：DOI→work 元数据（0成本/次），失败返回 None。
+
+    纯查询层，不写任何缓存；select 限字段控制响应体积；mailto 提示 OpenAlex 礼貌池。
+    """
+    if not doi:
+        return None
+    doi = process_doi(doi)[0]
+    return _openalex_get(f'/works/https://doi.org/{doi}', params={
+        'select': 'id,doi,title,publication_date,ids,open_access',
+        'mailto': CROSSREF_MAILTO,
+    })
+
+
+def verify_work_title(doi: str, title: str) -> bool:
+    """OpenAlex 在线交叉验证：DOI 返回标题与给定标题规范化相似度≥0.9（与缓存 verify_doi_title 同门控）。
+
+    缓存验证 miss 时的在线兜底（pdf2md 主DOI定级）；不发缓存、不发其他端点。
+    """
+    if not doi or not title:
+        return False
+    work = get_work_by_doi(doi)
+    wtitle = (work or {}).get('title')
+    if not wtitle:
+        return False
+    return SequenceMatcher(None, norm_title(title),
+                           norm_title(wtitle)).ratio() >= _OPENALEX_SIM
 
 
 def get_doi_from_citation(citation_text: str, cache: dict = None,

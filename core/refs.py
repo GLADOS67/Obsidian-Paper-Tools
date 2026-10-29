@@ -54,7 +54,7 @@ def _ref_target(ref: str) -> str:
 def extract_doi_set(ref_list: list) -> set:
     if not ref_list:
         return set()
-    return {d for ref in ref_list if isinstance(ref, str)
+    return {d.lower() for ref in ref_list if isinstance(ref, str)
             for d in PATTERN_DOI.findall(_ref_target(ref))}
 
 
