@@ -71,6 +71,11 @@ def title_or(fm: Dict, fallback: str = '') -> str:
     return raw if raw else fallback
 
 
+def source_key(fm: Dict) -> str:
+    """source frontmatter → 匹配键：小写、去首尾空白、去尾部 '/'（match/reconcile 共用）。"""
+    return (fm.get('source') or '').strip().lower().rstrip('/')
+
+
 def fm_title(fm: Dict, fallback: str = '') -> str:
     """frontmatter title → 字符串：列表拼接、去空白；空或 [[wikilink]] 包裹视为无效，回退 fallback。"""
     if not fm:

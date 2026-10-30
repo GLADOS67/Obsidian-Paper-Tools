@@ -140,16 +140,17 @@ def process_local_references_in_md(md_path: Path, override_main_doi: Optional[st
     ref_entries = RE_REF_ENTRY.findall(content[ref_start:])
     print(f'找到 {len(ref_entries)} 条本地参考文献，处理中...')
 
+    # repair 每条约稿全文只算一次（原实现 need 过滤与主循环各 repair 一遍），
     # 无DOI条目并行查Crossref（复用 lookup_dois_parallel：共享线程池 + map 保序）
-    need = [(i, text) for i, (_, _, text) in enumerate(ref_entries)
-            if not PATTERN_DOI.search(repair_doi_text(text))]
-    found = {need[k][0]: r[0] for k, r in
-             lookup_dois_parallel([t for _, t in need], cache).items()}
+    repaired = [repair_doi_text(text) for _, _, text in ref_entries]
+    need_idx = [i for i, r in enumerate(repaired) if not PATTERN_DOI.search(r)]
+    found = {need_idx[k]: r[0] for k, r in
+             lookup_dois_parallel([repaired[i] for i in need_idx], cache).items()}
 
     references = []
     for i, (num1, num2, text) in enumerate(ref_entries):
         text = text.rstrip('. \t')
-        if m := PATTERN_DOI.search(repair_doi_text(text)):
+        if m := PATTERN_DOI.search(repaired[i]):
             doi = m.group(0)
         else:
             doi = found.get(i)

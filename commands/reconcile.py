@@ -2,14 +2,14 @@ import re
 import shutil
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
 sys.stdout.reconfigure(encoding='utf-8')
 from config import OBSIDIAN_ROOT
 from core import iter_vault_dirs
 from core.cache import map_parallel, read_text_safe
 from core.doi import extract_doi_from_frontmatter
-from core.frontmatter import parse_frontmatter_batch
+from core.frontmatter import parse_frontmatter_batch, source_key
 from core.refs import (
     classify_claude_stem,
     parse_h1_wikilink, extract_wikilink_name,
@@ -55,7 +55,7 @@ def build_clippings_index(vault_root: Path) -> Tuple[Dict[str, str], Dict[str, s
                 pa_ref.setdefault(pa, vault_dir.name)
             if pt := extract_wikilink_name(fm.get('paper-translate')):
                 pt_ref.setdefault(pt, vault_dir.name)
-            src = (fm.get('source') or '').strip().lower().rstrip('/')
+            src = source_key(fm)
             if src:
                 clip_by_source.setdefault(src, vault_dir.name)
             refs = fm.get('reference', [])
@@ -108,17 +108,48 @@ def _vault_of_stem(stem: str, clip_to_vault: Dict[str, str]) -> Optional[str]:
     return None
 
 
+def _chi_target_vault(fm: Optional[dict], clip_to_vault: Dict[str, str],
+                      clip_by_source: Dict[str, str], clip_first_doi: Dict[str, str],
+                      clip_doi_sets: Dict[str, set],
+                      clip_by_doi: Dict[str, List[str]]) -> Tuple[Optional[str], Optional[str]]:
+    """PT 笔记 → (目标vault, target)：reverse → source → first_ref → DOI 链，首命中即返回。
+
+    与原地 if 链语义一致（target 保留上一步取值供展示）。
+    """
+    if not fm:
+        return None, None
+    target = extract_wikilink_name(fm.get('paper-translate'))
+    if target and (tv := _vault_of_stem(target, clip_to_vault)):
+        return tv, target
+    src = source_key(fm)
+    if src and (tv := clip_by_source.get(src)):
+        return tv, target
+    if ref0 := first_ref_target(fm.get('reference', [])):
+        target = ref0
+        if tv := _vault_of_stem(ref0, clip_to_vault):
+            return tv, target
+    refs0 = fm.get('reference', [])
+    if refs0 and (d0 := wikilink_doi(refs0[0])) and (tv := clip_first_doi.get(d0.lower())):
+        return tv, target
+    dois = extract_doi_set(fm.get('reference', []))
+    if main_doi := extract_doi_from_frontmatter(fm):
+        dois.add(main_doi.lower())
+    return _match_by_doi(dois, clip_to_vault, clip_by_doi, clip_doi_sets), target
+
+
 def resolve_action(target_stem: Optional[str], orig_vault: str, file_stem: str,
                    clip_to_vault: Dict[str, str], referenced: Dict[str, str],
                    force_keep: bool = False) -> str:
+    """目标clip vault → 反向引用 → 自身stem 定位，未命中转 TRASH（提前返回扁平化）。"""
     if force_keep:
         return 'keep'
     tv = _vault_of_stem(target_stem, clip_to_vault) if target_stem else None
-    if tv is None:
-        rv = _ref_vault(file_stem, referenced)
-        if rv is not None:
-            return 'keep' if rv == orig_vault else f'move:{rv}'
-        tv = _vault_of_stem(file_stem, clip_to_vault)
+    if tv is not None:
+        return 'keep' if tv == orig_vault else f'move:{tv}'
+    rv = _ref_vault(file_stem, referenced)
+    if rv is not None:
+        return 'keep' if rv == orig_vault else f'move:{rv}'
+    tv = _vault_of_stem(file_stem, clip_to_vault)
     if tv is None:
         return 'trash'
     return 'keep' if tv == orig_vault else f'move:{tv}'
@@ -202,34 +233,10 @@ def run_reconcile(vault_root=OBSIDIAN_ROOT,
             chi_parsed = parse_frontmatter_batch(chi_mds, fm_only=True)  # 仅需fm，免全量body驻留内存
             for md, fm in zip(chi_mds, chi_parsed):
                 stem = md.stem
-                target = None
-                tv = None
-                if fm:
-                    if pt := extract_wikilink_name(fm.get('paper-translate')):
-                        target = pt
-                        tv = _vault_of_stem(pt, clip_to_vault)
-                    if tv is None:
-                        src = (fm.get('source') or '').strip().lower().rstrip('/')
-                        if src:
-                            tv = clip_by_source.get(src)
-                    if tv is None:
-                        ref0 = first_ref_target(fm.get('reference', []))
-                        if ref0:
-                            target = ref0
-                            tv = _vault_of_stem(ref0, clip_to_vault)
-                    if tv is None:
-                        refs0 = fm.get('reference', [])
-                        if refs0 and (d0 := wikilink_doi(refs0[0])):
-                            tv = clip_first_doi.get(d0.lower())
-                    if tv is None:
-                        dois = extract_doi_set(fm.get('reference', []))
-                        if main_doi := extract_doi_from_frontmatter(fm):
-                            dois.add(main_doi.lower())
-                        tv = _match_by_doi(dois, clip_to_vault, clip_by_doi, clip_doi_sets)
-                if tv is None:
-                    action = resolve_action(None, vname, stem, clip_to_vault, pt_referenced)
-                else:
-                    action = 'keep' if tv == vname else f'move:{tv}'
+                tv, target = _chi_target_vault(fm, clip_to_vault, clip_by_source,
+                                               clip_first_doi, clip_doi_sets, clip_by_doi)
+                action = (resolve_action(None, vname, stem, clip_to_vault, pt_referenced)
+                          if tv is None else ('keep' if tv == vname else f'move:{tv}'))
                 pt_info[str(md)] = (md, vname, action)
                 print(f'[PT] {action:20s} {_rel(vault_root, md)}')
                 if target:

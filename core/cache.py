@@ -24,10 +24,11 @@ def load_cache(path: Path) -> dict:
 
 
 def save_cache(path: Path, cache: dict) -> None:
-    """写 JSON 缓存（确保父目录存在），异常静默。"""
+    """写 JSON 缓存（确保父目录存在），异常静默；紧凑序列化减体积/提速。"""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding='utf-8')
+        path.write_text(json.dumps(cache, ensure_ascii=False, separators=(',', ':')),
+                        encoding='utf-8')
     except Exception:
         pass
 

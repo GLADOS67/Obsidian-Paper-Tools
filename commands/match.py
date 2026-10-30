@@ -1,3 +1,4 @@
+import re
 import shutil
 from collections import Counter
 from difflib import SequenceMatcher
@@ -6,7 +7,8 @@ from typing import Dict, List, Optional, Tuple
 
 from core.cache import read_texts_batch
 from core.doi import PATTERN_DOI as DOI_RE
-from core.frontmatter import dump_frontmatter, parse_frontmatter_batch
+from core.frontmatter import (dump_frontmatter, parse_frontmatter_batch,
+                              source_key)
 from core.obsidian_path import SM_QUICK
 from core.refs import (
     WIKILINK_RE, LINK_TARGET_RE,
@@ -19,6 +21,7 @@ from config import OBSIDIAN_ROOT
 
 JACCARD_THRESHOLD = 0.85
 TRASH_CLAUDE = OBSIDIAN_ROOT / 'TRASH' / 'Claude'
+_ZH_CHAR = re.compile(r'[\u4e00-\u9fff]')
 
 
 def _extract_clippings_doi(fm: dict) -> Optional[str]:
@@ -112,8 +115,7 @@ def _index_claude_mds(mds, texts, pa_index: Dict[str, Path],
         ch = _index_pa_note(md, text, pa_index, pa_reverse, pa_text)
         if ch is None and with_alias:
             ch = next((s for line in text.split('\n')
-                       if (s := line.lstrip('#').strip())
-                       and any('一' <= c <= '鿿' for c in s)), None)
+                       if (s := line.lstrip('#').strip()) and _ZH_CHAR.search(s)), None)
         if ch and with_alias:
             pa_alias[stem] = ch
         new_pa[stem] = md
@@ -213,7 +215,7 @@ def _find_chi(clip_md: Path, fm: dict, chi_reverse: Dict[str, Tuple[Path, str]],
     rev = chi_reverse.get(clip_md.stem)
     if rev:
         return rev[0], rev[1], 'reverse', 1.0
-    clip_src = (fm.get('source') or '').strip().lower().rstrip('/')
+    clip_src = source_key(fm)
     if clip_src in by_source:
         return by_source[clip_src], None, 'source', 1.0
     clip_fr = first_ref_target(fm.get('reference', []))
@@ -301,7 +303,7 @@ def run_match(base_dir: str, dry_run: bool = False, threshold: float = JACCARD_T
     for md, fm in zip(chi_mds, chi_parsed):
         if not fm:
             continue
-        src = (fm.get('source') or '').strip().lower().rstrip('/')
+        src = source_key(fm)
         if src:
             by_source[src] = md
         refs = fm.get('reference', [])

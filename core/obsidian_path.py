@@ -1,6 +1,7 @@
 import re
 import urllib.parse
 from difflib import SequenceMatcher
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -11,6 +12,7 @@ SM_QUICK = 0.7
 _GLOB_ESCAPE_RE = re.compile(r'([\[\]*?])')
 
 
+@lru_cache(maxsize=256)  # 纯函数；交互循环重复输入同一 URI 时免重复 urlparse/parse_qs
 def _parse_obsidian_uri(uri: str) -> Optional[Tuple[str, str]]:
     try:
         parsed = urllib.parse.urlparse(uri)
@@ -56,21 +58,21 @@ def _fuzzy_search(dir_path: Path, stem_raw: str) -> Optional[Path]:
 
 def _fallback_search(file_clean: str) -> Optional[Path]:
     basename = Path(file_clean).name
-    bests = {basename: None, Path(basename).stem: None}
+    bests = {basename: (None, 0.0), Path(basename).stem: (None, 0.0)}  # (path, mtime)：每候选单次 stat
     try:
         for p in OBSIDIAN_ROOT.rglob('*.md'):
             if (t := p.stem) not in bests:
                 continue
-            cur = bests[t]
             try:  # 单文件 stat 失败（占用/权限/已删除）只跳过该候选，不中断整个遍历
-                newer = cur is None or p.stat().st_mtime > cur.stat().st_mtime
+                mtime = p.stat().st_mtime
             except OSError:
                 continue
-            if newer:
-                bests[t] = p
+            cur_path, cur_mtime = bests[t]
+            if cur_path is None or mtime > cur_mtime:
+                bests[t] = (p, mtime)
     except Exception:
         return None
-    return bests[basename] or bests[Path(basename).stem]
+    return bests[basename][0] or bests[Path(basename).stem][0]
 
 
 def resolve_input_path(input_str: str, fallback_search: bool = False) -> Optional[Path]:

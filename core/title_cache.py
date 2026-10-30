@@ -32,6 +32,11 @@ def cache_entry_title(val) -> str:
     return val if isinstance(val, str) else ''
 
 
+def cache_entry_norm(val) -> str:
+    """条目第二元素（规范化标题）→ str，缺失空串；_rebuild/put 共用同一取值链。"""
+    return val[1] if isinstance(val, list) and len(val) >= 2 and isinstance(val[1], str) else ''
+
+
 def load_doi_title_cache() -> Dict:
     cache = load_cache(DOI_TITLE_CACHE)
     _rebuild_title_reverse(cache)
@@ -56,8 +61,7 @@ def _rebuild_title_reverse(cache: dict) -> None:
         title = cache_entry_title(val)
         if not title:
             continue
-        norm = val[1] if isinstance(val, list) and len(val) >= 2 and isinstance(val[1], str) else ''
-        _index_title(norm or norm_title(title), doi)
+        _index_title(cache_entry_norm(val) or norm_title(title), doi)
         _index_title(title.lower(), doi)
 
 
@@ -96,10 +100,8 @@ def put_doi_title(cache: dict, doi: str, title: str, lock: threading.Lock = None
         else:
             cache[doi] = [title, norm_title(title)] if title else ['', '']
         cur = cache[doi]
-        t = cache_entry_title(cur)
-        if t:
-            n = cur[1] if isinstance(cur, list) and len(cur) >= 2 and isinstance(cur[1], str) else ''
-            _index_title(n or norm_title(t), doi)
+        if t := cache_entry_title(cur):
+            _index_title(cache_entry_norm(cur) or norm_title(t), doi)
             _index_title(t.lower(), doi)
 
 
